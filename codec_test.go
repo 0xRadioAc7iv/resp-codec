@@ -61,6 +61,105 @@ func BenchmarkEncode(b *testing.B) {
 	}
 }
 
+func ExampleAppendEncode() {
+	// Reuse a single buffer across multiple encodes — zero additional allocations
+	// when capacity is sufficient.
+	buf := make([]byte, 0, 128)
+
+	buf, _ = AppendEncode(buf, SimpleString("OK"))
+	buf, _ = AppendEncode(buf, errors.New("ERR unknown command"))
+	buf, _ = AppendEncode(buf, 42)
+	buf, _ = AppendEncode(buf, "hello")
+	fmt.Printf("%q\n", buf)
+
+	// Output:
+	// "+OK\r\n-ERR unknown command\r\n:42\r\n$5\r\nhello\r\n"
+}
+
+func BenchmarkAppendEncode(b *testing.B) {
+	cases := []struct {
+		name  string
+		input any
+	}{
+		{"simple string", SimpleString("OK")},
+		{"bulk string", "hello world"},
+		{"error", errors.New("ERR unknown command")},
+		{"integer", 42},
+		{"integer max", math.MaxInt},
+		{"array", []any{"SET", "key", "value"}},
+		{"null bulk string", Null},
+		{"null array", NullArr},
+	}
+
+	// Pre-allocate a buffer large enough to avoid any reallocs during the benchmark.
+	buf := make([]byte, 0, 256)
+
+	for _, c := range cases {
+		b.Run(c.name, func(b *testing.B) {
+			for b.Loop() {
+				buf, _ = AppendEncode(buf[:0], c.input)
+			}
+		})
+	}
+}
+
+func TestAppendEncode(t *testing.T) {
+	t.Run("appends to existing content", func(t *testing.T) {
+		buf := []byte("+OK\r\n")
+		buf, err := AppendEncode(buf, 42)
+		assertNoError(t, err)
+		assertCorrectMessage(t, buf, []byte("+OK\r\n:42\r\n"))
+	})
+
+	t.Run("nil buf behaves like empty buf", func(t *testing.T) {
+		buf, err := AppendEncode(nil, SimpleString("OK"))
+		assertNoError(t, err)
+		assertCorrectMessage(t, buf, []byte("+OK\r\n"))
+	})
+
+	t.Run("reused buf produces correct output", func(t *testing.T) {
+		buf := make([]byte, 0, 64)
+		buf, err := AppendEncode(buf, "hello")
+		assertNoError(t, err)
+		assertCorrectMessage(t, buf, []byte("$5\r\nhello\r\n"))
+
+		buf, err = AppendEncode(buf[:0], 42)
+		assertNoError(t, err)
+		assertCorrectMessage(t, buf, []byte(":42\r\n"))
+	})
+
+	t.Run("unsupported type returns error", func(t *testing.T) {
+		_, err := AppendEncode(nil, 3.14)
+		if err == nil {
+			t.Error("expected error for unsupported type, got nil")
+		}
+	})
+
+	t.Run("top-level unsupported type preserves existing content", func(t *testing.T) {
+		existing := []byte("+OK\r\n")
+		buf := make([]byte, len(existing), 128)
+		copy(buf, existing)
+		result, err := AppendEncode(buf, 3.14)
+		if err == nil {
+			t.Fatal("expected error for unsupported type, got nil")
+		}
+		assertCorrectMessage(t, result, existing)
+	})
+
+	t.Run("failed array encoding rolls back partial bytes", func(t *testing.T) {
+		existing := []byte("+OK\r\n")
+		buf := make([]byte, len(existing), 128)
+		copy(buf, existing)
+
+		result, err := AppendEncode(buf, []any{"good", 3.14})
+		if err == nil {
+			t.Fatal("expected error for unsupported element type, got nil")
+		}
+		// buf should be restored to its pre-call state
+		assertCorrectMessage(t, result, existing)
+	})
+}
+
 func TestEncode(t *testing.T) {
 
 	t.Run("simple string - OK", func(t *testing.T) {

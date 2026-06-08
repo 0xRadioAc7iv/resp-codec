@@ -1,5 +1,9 @@
 // Package respcodec implements encoding for the Redis Serialization Protocol (RESP).
-// It supports RESP2 types: simple strings, errors, integers, bulk strings, arrays, null bulk strings, and null arrays.
+// It supports RESP2 types: simple strings, errors, integers, bulk strings, arrays,
+// null bulk strings, and null arrays.
+//
+// Use Encode to serialize a single value into a fresh buffer. Use AppendEncode to
+// write into a caller-supplied buffer, enabling buffer reuse and avoiding extra allocations.
 package respcodec
 
 // SimpleString represents a RESP simple string (prefix '+').
@@ -8,20 +12,17 @@ package respcodec
 // Use the plain string type for binary-safe bulk string encoding instead.
 type SimpleString string
 
-// NullBulkString represents a RESP null bulk string ($-1\r\n).
-// It signals the absence of a value, distinct from an empty string.
-// Use the package-level Null sentinel rather than constructing this directly.
-type NullBulkString struct{}
+// nullBulkString is the unexported backing type for the Null sentinel.
+type nullBulkString struct{}
 
 // Null is the sentinel value for encoding a RESP null bulk string ($-1\r\n).
-var Null = NullBulkString{}
+// It signals the absence of a value, distinct from an empty string.
+var Null = nullBulkString{}
 
-// NullArray represents a RESP null array (*-1\r\n).
-// It is an alternative way to signal a null value, used by commands like BLPOP on timeout.
-// Prefer NullBulkString (Null) for general null values; use NullArray only when the
-// protocol specifically requires it.
-// Use the package-level NullArr sentinel rather than constructing this directly.
-type NullArray struct{}
+// nullArray is the unexported backing type for the NullArr sentinel.
+type nullArray struct{}
 
 // NullArr is the sentinel value for encoding a RESP null array (*-1\r\n).
-var NullArr = NullArray{}
+// It is an alternative null representation used by commands like BLPOP on timeout.
+// Prefer Null for general null values; use NullArr only when the protocol specifically requires it.
+var NullArr = nullArray{}

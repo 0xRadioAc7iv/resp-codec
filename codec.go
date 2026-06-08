@@ -17,31 +17,52 @@ import (
 //   - Null         → $-1\r\n             (null bulk string)
 //   - NullArr      → *-1\r\n             (null array)
 //
-// Returns (nil, error) for unsupported types or invalid input.
-// For arrays, encoding stops at the first invalid element and returns (nil, error)
-// wrapping the element's error with its index.
+// Returns (nil, error) for unsupported types, invalid input, or arrays containing
+// an invalid element.
+//
+// Encode allocates a single initial buffer and grows it as needed; for outputs
+// that fit within 64 bytes this is typically one allocation. Array elements are
+// written into the same buffer via the internal append-style encode function,
+// avoiding per-element allocations. Use AppendEncode to supply your own buffer.
 func Encode(data any) ([]byte, error) {
-	var buf []byte
+	buf, err := appendEncode(make([]byte, 0, 64), data)
+	if err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
 
+// AppendEncode appends the RESP encoding of data into buf and returns the extended slice.
+// It makes zero additional allocations when buf has sufficient capacity, making it
+// suitable for callers that manage their own buffer — for example, writing directly
+// to a net.Conn using a pooled buffer from sync.Pool.
+//
+// On error, buf is returned in its original state (no partial bytes are left behind),
+// so it is safe to reuse after a failed call.
+//
+// Supported types are identical to Encode.
+func AppendEncode(buf []byte, data any) ([]byte, error) {
+	return appendEncode(buf, data)
+}
+
+// appendEncode appends the RESP encoding of data into buf and returns the extended slice.
+// It is the shared append-style core used by Encode and AppendEncode, and called recursively for arrays.
+func appendEncode(buf []byte, data any) ([]byte, error) {
 	switch v := data.(type) {
 
 	// Used for simple strings (cannot have CR or LF) like "OK", "PONG" etc.
 	case SimpleString:
 		if strings.ContainsAny(string(v), "\r\n") {
-			return nil, fmt.Errorf("simple string must not contain CR or LF characters: %q", string(v))
+			return buf, fmt.Errorf("simple string must not contain CR or LF characters: %q", string(v))
 		}
 
-		buf = make([]byte, 0, 3+len(v))
 		buf = append(buf, '+')
 		buf = append(buf, v...)
 
 	// Used for strings (can have CR and LF), Binary Safe
 	case string:
-		vLength := len(v)
-
-		buf = make([]byte, 0, 6+vLength)
 		buf = append(buf, '$')
-		buf = strconv.AppendInt(buf, int64(vLength), 10)
+		buf = strconv.AppendInt(buf, int64(len(v)), 10)
 		buf = append(buf, '\r', '\n')
 		buf = append(buf, v...)
 
@@ -50,51 +71,47 @@ func Encode(data any) ([]byte, error) {
 		msg := v.Error()
 
 		if strings.ContainsAny(msg, "\r\n") {
-			return nil, fmt.Errorf("error message must not contain CR or LF characters: %q", msg)
+			return buf, fmt.Errorf("error message must not contain CR or LF characters: %q", msg)
 		}
 
-		buf = make([]byte, 0, 3+len(msg))
 		buf = append(buf, '-')
 		buf = append(buf, msg...)
 
 	// Used for numbers
 	case int:
-		buf = make([]byte, 0, 35)
 		buf = append(buf, ':')
 		buf = strconv.AppendInt(buf, int64(v), 10)
 
 	// Used for arrays; elements are encoded recursively and may be of mixed types
 	case []any:
-		vLength := len(v)
+		savedBuf := buf   // preserve reference in case encoding fails
+		start := len(buf) // checkpoint before any array bytes are written
 
-		buf = make([]byte, 0, 4+vLength*16)
 		buf = append(buf, '*')
-		buf = strconv.AppendInt(buf, int64(vLength), 10)
+		buf = strconv.AppendInt(buf, int64(len(v)), 10)
 		buf = append(buf, '\r', '\n')
 
 		for i, item := range v {
-			encodedItem, err := Encode(item)
+			var err error
+			buf, err = appendEncode(buf, item)
 			if err != nil {
-				return nil, fmt.Errorf("failed to encode array element at index %d: %w", i, err)
+				return savedBuf[:start], fmt.Errorf("failed to encode array element at index %d: %w", i, err)
 			}
-			buf = append(buf, encodedItem...)
 		}
 
 		return buf, nil
 
 	// Used for null bulk string; signals absence of a value ($-1\r\n)
-	case NullBulkString:
-		return []byte("$-1\r\n"), nil
-		// buf = make([]byte, 0, 4)
-		// buf = append(buf, []byte("$-1")...)
+	case nullBulkString:
+		buf = append(buf, []byte("$-1")...)
 
 	// Used for null array; alternative null representation used by commands like BLPOP on timeout (*-1\r\n)
-	case NullArray:
-		return []byte("*-1\r\n"), nil
+	case nullArray:
+		buf = append(buf, []byte("*-1")...)
 
 	// When none of the type matches, return an error
 	default:
-		return nil, fmt.Errorf("unsupported type %T: cannot encode to RESP", data)
+		return buf, fmt.Errorf("unsupported type %T: cannot encode to RESP", data)
 	}
 
 	buf = append(buf, '\r', '\n')
