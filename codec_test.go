@@ -15,6 +15,14 @@ func ExampleEncode() {
 	fmt.Printf("%q\n", buf)
 	buf, _ = Encode(42)
 	fmt.Printf("%q\n", buf)
+	buf, _ = Encode("hello")
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode([]any{"GET", "key"})
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(Null)
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(NullArr)
+	fmt.Printf("%q\n", buf)
 	buf, err := Encode(3.14) // unknown type → nil, error
 	fmt.Printf("%v %v\n", buf, err)
 
@@ -22,6 +30,10 @@ func ExampleEncode() {
 	// "+OK\r\n"
 	// "-ERR unknown command\r\n"
 	// ":42\r\n"
+	// "$5\r\nhello\r\n"
+	// "*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n"
+	// "$-1\r\n"
+	// "*-1\r\n"
 	// [] unsupported type float64: cannot encode to RESP
 }
 
@@ -31,9 +43,13 @@ func BenchmarkEncode(b *testing.B) {
 		input any
 	}{
 		{"simple string", SimpleString("OK")},
+		{"bulk string", "hello world"},
 		{"error", errors.New("ERR unknown command")},
 		{"integer", 42},
 		{"integer max", math.MaxInt},
+		{"array", []any{"SET", "key", "value"}},
+		{"null bulk string", Null},
+		{"null array", NullArr},
 	}
 
 	for _, c := range cases {
@@ -195,6 +211,109 @@ func TestEncode(t *testing.T) {
 		encoded, err := Encode(math.MinInt)
 		assertNoError(t, err)
 		assertCorrectMessage(t, encoded, fmt.Appendf(nil, ":%d\r\n", math.MinInt))
+	})
+
+	t.Run("bulk string - normal", func(t *testing.T) {
+		encoded, err := Encode("hello")
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("$5\r\nhello\r\n"))
+	})
+
+	t.Run("bulk string - with spaces", func(t *testing.T) {
+		encoded, err := Encode("hello world")
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("$11\r\nhello world\r\n"))
+	})
+
+	t.Run("bulk string - binary safe with CRLF", func(t *testing.T) {
+		encoded, err := Encode("hello\r\nworld")
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("$12\r\nhello\r\nworld\r\n"))
+	})
+
+	t.Run("bulk string - zero length", func(t *testing.T) {
+		encoded, err := Encode("")
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("$0\r\n\r\n"))
+	})
+
+	t.Run("bulk string - null", func(t *testing.T) {
+		encoded, err := Encode(Null)
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("$-1\r\n"))
+	})
+
+	t.Run("array - empty", func(t *testing.T) {
+		encoded, err := Encode([]any{})
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("*0\r\n"))
+	})
+
+	t.Run("array - nil slice", func(t *testing.T) {
+		encoded, err := Encode([]any(nil))
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("*0\r\n"))
+	})
+
+	t.Run("array - single string element", func(t *testing.T) {
+		encoded, err := Encode([]any{"hello"})
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("*1\r\n$5\r\nhello\r\n"))
+	})
+
+	t.Run("array - typical command", func(t *testing.T) {
+		encoded, err := Encode([]any{"GET", "key"})
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n"))
+	})
+
+	t.Run("array - mixed types", func(t *testing.T) {
+		encoded, err := Encode([]any{"SET", "key", 1})
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n:1\r\n"))
+	})
+
+	t.Run("array - nested", func(t *testing.T) {
+		encoded, err := Encode([]any{[]any{"foo"}})
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("*1\r\n*1\r\n$3\r\nfoo\r\n"))
+	})
+
+	t.Run("array - null", func(t *testing.T) {
+		encoded, err := Encode(NullArr)
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("*-1\r\n"))
+	})
+
+	t.Run("array - integers only", func(t *testing.T) {
+		encoded, err := Encode([]any{1, 2, 3})
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
+	})
+
+	t.Run("array - null element", func(t *testing.T) {
+		encoded, err := Encode([]any{"foo", Null, "bar"})
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("*3\r\n$3\r\nfoo\r\n$-1\r\n$3\r\nbar\r\n"))
+	})
+
+	t.Run("array - nested with simple string and error", func(t *testing.T) {
+		encoded, err := Encode([]any{
+			[]any{1, 2, 3},
+			[]any{SimpleString("Foo"), errors.New("Bar")},
+		})
+		assertNoError(t, err)
+		assertCorrectMessage(t, encoded, []byte("*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n"))
+	})
+
+	t.Run("array - unsupported element returns nil and error", func(t *testing.T) {
+		encoded, err := Encode([]any{"ok", 3.14})
+		if encoded != nil {
+			t.Errorf("expected nil bytes, got %q", encoded)
+		}
+		if err == nil {
+			t.Error("expected error for unsupported element type, got nil")
+		}
 	})
 
 	t.Run("unknown type - returns nil and error", func(t *testing.T) {
