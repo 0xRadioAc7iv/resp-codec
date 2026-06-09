@@ -1,7 +1,10 @@
 package respcodec
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -43,6 +46,123 @@ func Encode(data any) ([]byte, error) {
 // Supported types are identical to Encode.
 func AppendEncode(buf []byte, data any) ([]byte, error) {
 	return appendEncode(buf, data)
+}
+
+// Decode parses a RESP-encoded byte slice into a Go value of type T.
+//
+// Supported type parameters and the RESP prefix each expects:
+//
+//	Decode[SimpleString] — expects '+' prefix
+//	Decode[error]        — expects '-' prefix
+//	Decode[int]          — expects ':' prefix; handles negative values
+//
+// Returns (zero, error) on a missing or wrong type prefix, an empty buffer,
+// or an invalid character in the data. Panics for unsupported type parameters.
+func Decode[T any](buf []byte) (T, error) {
+	var t T
+
+	r := bytes.NewReader(buf)
+
+	switch any((*T)(nil)).(type) {
+	case *SimpleString:
+		b, err := r.ReadByte()
+		if err != nil {
+			return t, fmt.Errorf("failed to read type prefix: %w", err)
+		}
+		if b != '+' {
+			return t, fmt.Errorf("invalid type prefix for SimpleString: expected '+', got %q", b)
+		}
+
+		var simpleString strings.Builder
+
+		for {
+			b, err := r.ReadByte()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return t, fmt.Errorf("failed to read simple string data: %w", err)
+			}
+			if b == '\r' {
+				break
+			}
+			simpleString.WriteByte(b)
+		}
+
+		return any(SimpleString(simpleString.String())).(T), nil
+
+	case *error:
+		b, err := r.ReadByte()
+		if err != nil {
+			return t, fmt.Errorf("failed to read type prefix: %w", err)
+		}
+		if b != '-' {
+			return t, fmt.Errorf("invalid type prefix for error: expected '-', got %q", b)
+		}
+
+		var errorString strings.Builder
+
+		for {
+			b, err := r.ReadByte()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return t, fmt.Errorf("failed to read error string data: %w", err)
+			}
+			if b == '\r' {
+				break
+			}
+			errorString.WriteByte(b)
+		}
+
+		return any(errors.New(errorString.String())).(T), nil
+
+	case *int:
+		b, err := r.ReadByte()
+		if err != nil {
+			return t, fmt.Errorf("failed to read type prefix: %w", err)
+		}
+		if b != ':' {
+			return t, fmt.Errorf("invalid type prefix for int: expected ':', got %q", b)
+		}
+
+		// -1 = yes, 1 = no
+		isNeg := 1
+		num := 0
+
+		b, err = r.ReadByte()
+		if err != nil {
+			return t, fmt.Errorf("failed to read type prefix: %w", err)
+		}
+		if b == '-' {
+			isNeg = -1
+		} else {
+			_ = r.UnreadByte()
+		}
+
+		for {
+			b, err := r.ReadByte()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return t, fmt.Errorf("failed to read int data: %w", err)
+			}
+			if b == '\r' {
+				break
+			}
+			if b < '0' || b > '9' {
+				return t, fmt.Errorf("invalid character in int: %q", b)
+			}
+			num = (num * 10) + int(b-'0')
+		}
+
+		return any(isNeg * num).(T), nil
+
+	default:
+		panic("unsupported type")
+	}
 }
 
 // appendEncode appends the RESP encoding of data into buf and returns the extended slice.

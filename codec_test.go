@@ -103,6 +103,39 @@ func BenchmarkAppendEncode(b *testing.B) {
 	}
 }
 
+func ExampleDecode() {
+	ss, _ := Decode[SimpleString]([]byte("+OK\r\n"))
+	fmt.Printf("%q\n", ss)
+	e, _ := Decode[error]([]byte("-ERR unknown command\r\n"))
+	fmt.Printf("%q\n", e.Error())
+	n, _ := Decode[int]([]byte(":42\r\n"))
+	fmt.Printf("%d\n", n)
+
+	// Output:
+	// "OK"
+	// "ERR unknown command"
+	// 42
+}
+
+func BenchmarkDecode(b *testing.B) {
+	cases := []struct {
+		name string
+		fn   func()
+	}{
+		{"simple string", func() { _, _ = Decode[SimpleString]([]byte("+OK\r\n")) }},
+		{"error", func() { _, _ = Decode[error]([]byte("-ERR unknown command\r\n")) }},
+		{"integer", func() { _, _ = Decode[int]([]byte(":42\r\n")) }},
+	}
+
+	for _, c := range cases {
+		b.Run(c.name, func(b *testing.B) {
+			for b.Loop() {
+				c.fn()
+			}
+		})
+	}
+}
+
 func TestAppendEncode(t *testing.T) {
 	t.Run("appends to existing content", func(t *testing.T) {
 		buf := []byte("+OK\r\n")
@@ -422,6 +455,155 @@ func TestEncode(t *testing.T) {
 		}
 		if err == nil {
 			t.Error("expected error for unsupported type, got nil")
+		}
+	})
+}
+
+func TestDecode(t *testing.T) {
+	t.Run("simple string - ok", func(t *testing.T) {
+		got, err := Decode[SimpleString]([]byte("+OK\r\n"))
+		assertNoError(t, err)
+		if got != SimpleString("OK") {
+			t.Errorf("expected %q, got %q", SimpleString("OK"), got)
+		}
+	})
+
+	t.Run("simple string - empty", func(t *testing.T) {
+		got, err := Decode[SimpleString]([]byte("+\r\n"))
+		assertNoError(t, err)
+		if got != SimpleString("") {
+			t.Errorf("expected empty SimpleString, got %q", got)
+		}
+	})
+
+	t.Run("simple string - multi word", func(t *testing.T) {
+		got, err := Decode[SimpleString]([]byte("+hello world\r\n"))
+		assertNoError(t, err)
+		if got != SimpleString("hello world") {
+			t.Errorf("expected %q, got %q", SimpleString("hello world"), got)
+		}
+	})
+
+	t.Run("simple string - wrong prefix returns error", func(t *testing.T) {
+		_, err := Decode[SimpleString]([]byte("-ERR\r\n"))
+		if err == nil {
+			t.Error("expected error for wrong prefix, got nil")
+		}
+	})
+
+	t.Run("simple string - empty buffer returns error", func(t *testing.T) {
+		_, err := Decode[SimpleString]([]byte{})
+		if err == nil {
+			t.Error("expected error for empty buffer, got nil")
+		}
+	})
+
+	t.Run("error - basic message", func(t *testing.T) {
+		got, err := Decode[error]([]byte("-ERR unknown command\r\n"))
+		assertNoError(t, err)
+		if got.Error() != "ERR unknown command" {
+			t.Errorf("expected %q, got %q", "ERR unknown command", got.Error())
+		}
+	})
+
+	t.Run("error - empty message", func(t *testing.T) {
+		got, err := Decode[error]([]byte("-\r\n"))
+		assertNoError(t, err)
+		if got.Error() != "" {
+			t.Errorf("expected empty error message, got %q", got.Error())
+		}
+	})
+
+	t.Run("error - WRONGTYPE prefix", func(t *testing.T) {
+		got, err := Decode[error]([]byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"))
+		assertNoError(t, err)
+		if got.Error() != "WRONGTYPE Operation against a key holding the wrong kind of value" {
+			t.Errorf("unexpected error message: %q", got.Error())
+		}
+	})
+
+	t.Run("error - wrong prefix returns error", func(t *testing.T) {
+		_, err := Decode[error]([]byte("+OK\r\n"))
+		if err == nil {
+			t.Error("expected error for wrong prefix, got nil")
+		}
+	})
+
+	t.Run("error - empty buffer returns error", func(t *testing.T) {
+		_, err := Decode[error]([]byte{})
+		if err == nil {
+			t.Error("expected error for empty buffer, got nil")
+		}
+	})
+
+	t.Run("integer - positive", func(t *testing.T) {
+		got, err := Decode[int]([]byte(":42\r\n"))
+		assertNoError(t, err)
+		if got != 42 {
+			t.Errorf("expected 42, got %d", got)
+		}
+	})
+
+	t.Run("integer - zero", func(t *testing.T) {
+		got, err := Decode[int]([]byte(":0\r\n"))
+		assertNoError(t, err)
+		if got != 0 {
+			t.Errorf("expected 0, got %d", got)
+		}
+	})
+
+	t.Run("integer - negative", func(t *testing.T) {
+		got, err := Decode[int]([]byte(":-1\r\n"))
+		assertNoError(t, err)
+		if got != -1 {
+			t.Errorf("expected -1, got %d", got)
+		}
+	})
+
+	t.Run("integer - large value", func(t *testing.T) {
+		got, err := Decode[int]([]byte(":1000000\r\n"))
+		assertNoError(t, err)
+		if got != 1000000 {
+			t.Errorf("expected 1000000, got %d", got)
+		}
+	})
+
+	t.Run("integer - max int", func(t *testing.T) {
+		buf := fmt.Appendf(nil, ":%d\r\n", math.MaxInt)
+		got, err := Decode[int](buf)
+		assertNoError(t, err)
+		if got != math.MaxInt {
+			t.Errorf("expected %d, got %d", math.MaxInt, got)
+		}
+	})
+
+	t.Run("integer - min int", func(t *testing.T) {
+		buf := fmt.Appendf(nil, ":%d\r\n", math.MinInt)
+		got, err := Decode[int](buf)
+		assertNoError(t, err)
+		if got != math.MinInt {
+			t.Errorf("expected %d, got %d", math.MinInt, got)
+		}
+	})
+
+	t.Run("integer - invalid character returns error", func(t *testing.T) {
+		_, err := Decode[int]([]byte(":abc\r\n"))
+		if err == nil {
+			t.Error("expected error for non-digit character, got nil")
+		}
+	})
+
+	t.Run("integer - wrong prefix returns error", func(t *testing.T) {
+		_, err := Decode[int]([]byte("+OK\r\n"))
+		if err == nil {
+			t.Error("expected error for wrong prefix, got nil")
+		}
+	})
+
+	t.Run("integer - empty buffer returns error", func(t *testing.T) {
+		_, err := Decode[int]([]byte{})
+		if err == nil {
+			t.Error("expected error for empty buffer, got nil")
 		}
 	})
 }
