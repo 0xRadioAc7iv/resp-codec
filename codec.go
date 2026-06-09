@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 )
@@ -52,112 +51,87 @@ func AppendEncode(buf []byte, data any) ([]byte, error) {
 //
 // Supported type parameters and the RESP prefix each expects:
 //
-//	Decode[SimpleString] — expects '+' prefix
-//	Decode[error]        — expects '-' prefix
-//	Decode[int]          — expects ':' prefix; handles negative values
+//	Decode[SimpleString] — expects '+' prefix; 1 alloc ([]byte→string copy)
+//	Decode[error]        — expects '-' prefix; 2 allocs (string copy + errors.New)
+//	Decode[int]          — expects ':' prefix; zero-alloc, handles negative values
 //
-// Returns (zero, error) on a missing or wrong type prefix, an empty buffer,
-// or an invalid character in the data. Panics for unsupported type parameters.
+// Returns (zero, error) on a missing or wrong type prefix, a buffer that is
+// too short, or an invalid character in the data. Panics for unsupported
+// type parameters.
+//
+// All cases validate the "\r\n" terminator at the end of the buffer. SimpleString
+// and error additionally reject embedded CR or LF in the payload.
 func Decode[T any](buf []byte) (T, error) {
 	var t T
 
-	r := bytes.NewReader(buf)
-
 	switch any((*T)(nil)).(type) {
 	case *SimpleString:
-		b, err := r.ReadByte()
-		if err != nil {
-			return t, fmt.Errorf("failed to read type prefix: %w", err)
+		if len(buf) < 3 {
+			return t, fmt.Errorf("buffer too short for SimpleString: need at least 3 bytes, got %d", len(buf))
 		}
-		if b != '+' {
-			return t, fmt.Errorf("invalid type prefix for SimpleString: expected '+', got %q", b)
+		if buf[0] != '+' {
+			return t, fmt.Errorf("invalid type prefix for SimpleString: expected '+', got %q", buf[0])
 		}
-
-		var simpleString strings.Builder
-
-		for {
-			b, err := r.ReadByte()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return t, fmt.Errorf("failed to read simple string data: %w", err)
-			}
-			if b == '\r' {
-				break
-			}
-			simpleString.WriteByte(b)
+		if buf[len(buf)-2] != '\r' || buf[len(buf)-1] != '\n' {
+			return t, fmt.Errorf("simple string missing CRLF terminator")
 		}
 
-		return any(SimpleString(simpleString.String())).(T), nil
+		payload := buf[1 : len(buf)-2]
+		if bytes.ContainsAny(payload, "\r\n") {
+			return t, fmt.Errorf("simple string must not contain CR or LF characters")
+		}
+		return any(SimpleString(payload)).(T), nil
 
 	case *error:
-		b, err := r.ReadByte()
-		if err != nil {
-			return t, fmt.Errorf("failed to read type prefix: %w", err)
+		if len(buf) < 3 {
+			return t, fmt.Errorf("buffer too short for error: need at least 3 bytes, got %d", len(buf))
 		}
-		if b != '-' {
-			return t, fmt.Errorf("invalid type prefix for error: expected '-', got %q", b)
+		if buf[0] != '-' {
+			return t, fmt.Errorf("invalid type prefix for error: expected '-', got %q", buf[0])
 		}
-
-		var errorString strings.Builder
-
-		for {
-			b, err := r.ReadByte()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return t, fmt.Errorf("failed to read error string data: %w", err)
-			}
-			if b == '\r' {
-				break
-			}
-			errorString.WriteByte(b)
+		if buf[len(buf)-2] != '\r' || buf[len(buf)-1] != '\n' {
+			return t, fmt.Errorf("error string missing CRLF terminator")
 		}
 
-		return any(errors.New(errorString.String())).(T), nil
+		payload := buf[1 : len(buf)-2]
+		if bytes.ContainsAny(payload, "\r\n") {
+			return t, fmt.Errorf("error string must not contain CR or LF characters")
+		}
+		return any(errors.New(string(payload))).(T), nil
 
 	case *int:
-		b, err := r.ReadByte()
-		if err != nil {
-			return t, fmt.Errorf("failed to read type prefix: %w", err)
+		if len(buf) < 4 {
+			return t, fmt.Errorf("buffer too short for int: need at least 4 bytes, got %d", len(buf))
 		}
-		if b != ':' {
-			return t, fmt.Errorf("invalid type prefix for int: expected ':', got %q", b)
+		if buf[0] != ':' {
+			return t, fmt.Errorf("invalid type prefix for int: expected ':', got %q", buf[0])
+		}
+		if buf[len(buf)-2] != '\r' || buf[len(buf)-1] != '\n' {
+			return t, fmt.Errorf("integer frame missing CRLF terminator")
 		}
 
-		// -1 = yes, 1 = no
+		// isNeg is a sign multiplier: -1 for negative numbers, 1 for positive
 		isNeg := 1
 		num := 0
+		payload := buf[1 : len(buf)-2]
 
-		b, err = r.ReadByte()
-		if err != nil {
-			return t, fmt.Errorf("failed to read type prefix: %w", err)
+		if len(payload) == 0 {
+			return t, fmt.Errorf("integer has no digit characters")
 		}
-		if b == '-' {
+		if payload[0] == '-' {
 			isNeg = -1
-		} else {
-			_ = r.UnreadByte()
+			payload = payload[1:]
+		}
+		if len(payload) == 0 {
+			return t, fmt.Errorf("integer has no digit characters")
 		}
 
-		for {
-			b, err := r.ReadByte()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return t, fmt.Errorf("failed to read int data: %w", err)
-			}
-			if b == '\r' {
-				break
-			}
+		for _, b := range payload {
 			if b < '0' || b > '9' {
 				return t, fmt.Errorf("invalid character in int: %q", b)
 			}
 			num = (num * 10) + int(b-'0')
 		}
-
 		return any(isNeg * num).(T), nil
 
 	default:

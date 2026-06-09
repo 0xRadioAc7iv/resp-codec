@@ -608,6 +608,64 @@ func TestDecode(t *testing.T) {
 	})
 }
 
+func TestDecodeMalformedFrames(t *testing.T) {
+	t.Run("simple string rejects malformed terminator", func(t *testing.T) {
+		cases := map[string][]byte{
+			"missing terminator": []byte("+OK"),
+			"bare CR":            []byte("+OK\rjunk"),
+			"trailing bytes":     []byte("+OK\r\njunk"),
+			"embedded LF":        []byte("+O\nK\r\n"),
+		}
+
+		for name, input := range cases {
+			t.Run(name, func(t *testing.T) {
+				_, err := Decode[SimpleString](input)
+				if err == nil {
+					t.Fatalf("expected error for malformed simple string %q", input)
+				}
+			})
+		}
+	})
+
+	t.Run("error rejects malformed terminator", func(t *testing.T) {
+		cases := map[string][]byte{
+			"missing terminator": []byte("-ERR"),
+			"bare CR":            []byte("-ERR\rjunk"),
+			"trailing bytes":     []byte("-ERR\r\njunk"),
+			"embedded LF":        []byte("-E\nRR\r\n"),
+		}
+
+		for name, input := range cases {
+			t.Run(name, func(t *testing.T) {
+				_, err := Decode[error](input)
+				if err == nil {
+					t.Fatalf("expected error for malformed error %q", input)
+				}
+			})
+		}
+	})
+
+	t.Run("integer rejects malformed payload", func(t *testing.T) {
+		cases := map[string][]byte{
+			"no digits":          []byte(":\r\n"),
+			"negative no digits": []byte(":-\r\n"),
+			"missing terminator": []byte(":42"),
+			"bare CR":            []byte(":42\rjunk"),
+			"trailing bytes":     []byte(":42\r\njunk"),
+			"embedded CR":        []byte(":4\r2\r\n"),
+		}
+
+		for name, input := range cases {
+			t.Run(name, func(t *testing.T) {
+				_, err := Decode[int](input)
+				if err == nil {
+					t.Fatalf("expected error for malformed integer %q", input)
+				}
+			})
+		}
+	})
+}
+
 func assertNoError(t testing.TB, err error) {
 	t.Helper()
 	if err != nil {
