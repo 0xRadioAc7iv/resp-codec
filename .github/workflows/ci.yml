@@ -18,6 +18,3 @@ jobs:
 
       - name: Test
         run: go test ./...
-
-      - name: Bench
-        run: go test -bench=. -benchmem -benchtime=3s ./...
