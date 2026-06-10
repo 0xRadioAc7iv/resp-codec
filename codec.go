@@ -56,6 +56,10 @@ func AppendEncode(buf []byte, data any) ([]byte, error) {
 //	Decode[int]            — expects ':' prefix; zero-alloc, handles negative values
 //	Decode[string]         — expects '$' prefix; decodes bulk string payload
 //	Decode[nullBulkString] — expects exactly "$-1\r\n"; zero-alloc
+//	Decode[[]any]          — expects '*' prefix; decodes elements recursively into a
+//	                         slice of mixed types; null elements ($-1\r\n, *-1\r\n)
+//	                         are decoded as nil
+//	Decode[nullArray]      — expects exactly "*-1\r\n"; zero-alloc
 //
 // Returns (zero, error) on a missing or wrong type prefix, a buffer that is
 // too short, a length mismatch, or an invalid character in the data. Panics
@@ -69,133 +73,52 @@ func Decode[T any](buf []byte) (T, error) {
 
 	switch any((*T)(nil)).(type) {
 	case *SimpleString:
-		if bufLen < 3 {
-			return t, fmt.Errorf("buffer too short for SimpleString: need at least 3 bytes, got %d", bufLen)
+		s, err := decodeSimpleString(bufLen, buf)
+		if err != nil {
+			return t, err
 		}
-		if buf[0] != '+' {
-			return t, fmt.Errorf("invalid type prefix for SimpleString: expected '+', got %q", buf[0])
-		}
-		if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
-			return t, fmt.Errorf("simple string missing CRLF terminator")
-		}
-
-		payload := buf[1 : bufLen-2]
-		if bytes.ContainsAny(payload, "\r\n") {
-			return t, fmt.Errorf("simple string must not contain CR or LF characters")
-		}
-		return any(SimpleString(payload)).(T), nil
+		return any(s).(T), nil
 
 	case *error:
-		if bufLen < 3 {
-			return t, fmt.Errorf("buffer too short for error: need at least 3 bytes, got %d", bufLen)
+		errString, err := decodeErrorString(bufLen, buf)
+		if err != nil {
+			return t, err
 		}
-		if buf[0] != '-' {
-			return t, fmt.Errorf("invalid type prefix for error: expected '-', got %q", buf[0])
-		}
-		if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
-			return t, fmt.Errorf("error string missing CRLF terminator")
-		}
-
-		payload := buf[1 : bufLen-2]
-		if bytes.ContainsAny(payload, "\r\n") {
-			return t, fmt.Errorf("error string must not contain CR or LF characters")
-		}
-		return any(errors.New(string(payload))).(T), nil
+		return any(errors.New(errString)).(T), nil
 
 	case *int:
-		if bufLen < 4 {
-			return t, fmt.Errorf("buffer too short for int: need at least 4 bytes, got %d", bufLen)
+		integer, err := decodeInteger(bufLen, buf)
+		if err != nil {
+			return t, err
 		}
-		if buf[0] != ':' {
-			return t, fmt.Errorf("invalid type prefix for int: expected ':', got %q", buf[0])
-		}
-		if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
-			return t, fmt.Errorf("integer frame missing CRLF terminator")
-		}
-
-		// isNeg is a sign multiplier: -1 for negative numbers, 1 for positive
-		isNeg := 1
-		num := 0
-		payload := buf[1 : bufLen-2]
-
-		if len(payload) == 0 {
-			return t, fmt.Errorf("integer has no digit characters")
-		}
-		if payload[0] == '-' {
-			isNeg = -1
-			payload = payload[1:]
-		}
-		if len(payload) == 0 {
-			return t, fmt.Errorf("integer has no digit characters")
-		}
-
-		for _, b := range payload {
-			if b < '0' || b > '9' {
-				return t, fmt.Errorf("invalid character in int: %q", b)
-			}
-			num = (num * 10) + int(b-'0')
-		}
-		return any(isNeg * num).(T), nil
+		return any(integer).(T), nil
 
 	case *string:
-		if bufLen < 5 {
-			return t, fmt.Errorf("buffer too short for bulk string: need at least 5 bytes, got %d", bufLen)
+		s, err := decodeBulkString(bufLen, buf)
+		if err != nil {
+			return t, err
 		}
-		if buf[0] != '$' {
-			return t, fmt.Errorf("invalid type prefix for bulk string: expected '$', got %q", buf[0])
-		}
-		if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
-			return t, fmt.Errorf("bulk string missing CRLF terminator")
-		}
-
-		digits := 0
-		var size int
-
-		for _, v := range buf[1:] {
-			if v == '\r' {
-				break
-			}
-			if v < '0' || v > '9' {
-				return t, fmt.Errorf("invalid character in bulk string length: %q", v)
-			}
-			size = (size * 10) + int(v-'0')
-			digits++
-		}
-
-		if size == 0 {
-			if buf[bufLen-4] != '\r' || buf[bufLen-3] != '\n' {
-				return t, fmt.Errorf("empty bulk string missing inner CRLF terminator")
-			}
-			return any("").(T), nil
-		}
-
-		payload := buf[digits+3 : bufLen-2]
-		if len(payload) != size {
-			return t, fmt.Errorf("bulk string length mismatch: declared %d, got %d", size, len(payload))
-		}
-
-		return any(string(payload)).(T), nil
+		return any(s).(T), nil
 
 	case *nullBulkString:
-		if bufLen != 5 {
-			return t, fmt.Errorf("")
+		err := decodeNullBulkString(bufLen, buf)
+		if err != nil {
+			return t, err
 		}
-		if buf[0] != '$' {
-			return t, fmt.Errorf("")
-		}
-		if buf[1] != '-' {
-			return t, fmt.Errorf("")
-		}
-		if buf[2] != '1' {
-			return t, fmt.Errorf("")
-		}
-		if buf[3] != '\r' {
-			return t, fmt.Errorf("")
-		}
-		if buf[4] != '\n' {
-			return t, fmt.Errorf("")
-		}
+		return t, nil
 
+	case *[]any:
+		arr, err := decodeArray(bufLen, buf)
+		if err != nil {
+			return t, err
+		}
+		return any(arr).(T), nil
+
+	case *nullArray:
+		err := decodeNullArray(bufLen, buf)
+		if err != nil {
+			return t, err
+		}
 		return t, nil
 
 	default:
@@ -274,4 +197,265 @@ func appendEncode(buf []byte, data any) ([]byte, error) {
 
 	buf = append(buf, '\r', '\n')
 	return buf, nil
+}
+
+func decodeSimpleString(bufLen int, buf []byte) (SimpleString, error) {
+	if bufLen < 3 {
+		return "", fmt.Errorf("buffer too short for SimpleString: need at least 3 bytes, got %d", bufLen)
+	}
+	if buf[0] != '+' {
+		return "", fmt.Errorf("invalid type prefix for SimpleString: expected '+', got %q", buf[0])
+	}
+	if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
+		return "", fmt.Errorf("simple string missing CRLF terminator")
+	}
+
+	payload := buf[1 : bufLen-2]
+	if bytes.ContainsAny(payload, "\r\n") {
+		return "", fmt.Errorf("simple string must not contain CR or LF characters")
+	}
+	return SimpleString(payload), nil
+}
+
+func decodeErrorString(bufLen int, buf []byte) (string, error) {
+	if bufLen < 3 {
+		return "", fmt.Errorf("buffer too short for error: need at least 3 bytes, got %d", bufLen)
+	}
+	if buf[0] != '-' {
+		return "", fmt.Errorf("invalid type prefix for error: expected '-', got %q", buf[0])
+	}
+	if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
+		return "", fmt.Errorf("error string missing CRLF terminator")
+	}
+
+	payload := buf[1 : bufLen-2]
+	if bytes.ContainsAny(payload, "\r\n") {
+		return "", fmt.Errorf("error string must not contain CR or LF characters")
+	}
+	return string(payload), nil
+}
+
+func decodeInteger(bufLen int, buf []byte) (int, error) {
+	if bufLen < 4 {
+		return 0, fmt.Errorf("buffer too short for int: need at least 4 bytes, got %d", bufLen)
+	}
+	if buf[0] != ':' {
+		return 0, fmt.Errorf("invalid type prefix for int: expected ':', got %q", buf[0])
+	}
+	if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
+		return 0, fmt.Errorf("integer frame missing CRLF terminator")
+	}
+
+	// isNeg is a sign multiplier: -1 for negative numbers, 1 for positive
+	isNeg := 1
+	num := 0
+	payload := buf[1 : bufLen-2]
+
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("integer has no digit characters")
+	}
+	if payload[0] == '-' {
+		isNeg = -1
+		payload = payload[1:]
+	}
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("integer has no digit characters")
+	}
+
+	for _, b := range payload {
+		if b < '0' || b > '9' {
+			return 0, fmt.Errorf("invalid character in int: %q", b)
+		}
+		num = (num * 10) + int(b-'0')
+	}
+	return isNeg * num, nil
+}
+
+func decodeBulkString(bufLen int, buf []byte) (string, error) {
+	if bufLen < 5 {
+		return "", fmt.Errorf("buffer too short for bulk string: need at least 5 bytes, got %d", bufLen)
+	}
+	if buf[0] != '$' {
+		return "", fmt.Errorf("invalid type prefix for bulk string: expected '$', got %q", buf[0])
+	}
+	if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
+		return "", fmt.Errorf("bulk string missing CRLF terminator")
+	}
+
+	digits, size, err := calculateDigitsAndSize(buf[1:])
+	if err != nil {
+		return "", err
+	}
+	if size == 0 {
+		if buf[bufLen-4] != '\r' || buf[bufLen-3] != '\n' {
+			return "", fmt.Errorf("empty bulk string missing inner CRLF terminator")
+		}
+		return "", nil
+	}
+
+	payload := buf[digits+3 : bufLen-2]
+	if len(payload) != size {
+		return "", fmt.Errorf("bulk string length mismatch: declared %d, got %d", size, len(payload))
+	}
+	return string(payload), nil
+}
+
+func decodeNullBulkString(bufLen int, buf []byte) error {
+	if bufLen != 5 {
+		return fmt.Errorf("invalid null bulk string: expected exactly 5 bytes, got %d", bufLen)
+	}
+	if buf[0] != '$' || buf[1] != '-' || buf[2] != '1' || buf[3] != '\r' || buf[4] != '\n' {
+		return fmt.Errorf("invalid null bulk string: expected \"$-1\\r\\n\", got %q", buf)
+	}
+	return nil
+}
+
+func decodeArray(bufLen int, buf []byte) ([]any, error) {
+	if bufLen < 4 {
+		return []any{}, fmt.Errorf("buffer too short for array: need at least 5 bytes, got %d", bufLen)
+	}
+	if buf[0] != '*' {
+		return []any{}, fmt.Errorf("invalid type prefix for array: expected '*', got %q", buf[0])
+	}
+
+	digits, size, err := calculateDigitsAndSize(buf[1:])
+	if err != nil {
+		return []any{}, err
+	}
+	if size == 0 {
+		return []any{}, nil
+	}
+
+	array := []any{}
+	payload := buf[digits+3:]
+	pos := 0
+	maxIdx := bufLen - digits - 3
+
+	for pos < maxIdx {
+		fIdx := pos
+		lIdx := pos
+		arrayLen := 0
+
+		// the second conditions excludes null bulk strings and null arrays
+		isBulkString := payload[pos] == '$' && payload[pos+1] != '-'
+		isArray := payload[pos] == '*' && payload[pos+1] != '-'
+
+		if isArray {
+			_, arrayLen, err = calculateDigitsAndSize(payload[1:])
+			if err != nil {
+				return []any{}, err
+			}
+		}
+
+		// NOTE
+		// skips the first '\n' if '$' is detected for bulk strings
+		// skips the first n '\n' if '*' is detected for arrays
+		for lIdx < maxIdx {
+			if payload[lIdx] == '\n' {
+				if isArray {
+					if arrayLen == 0 {
+						break
+					} else {
+						lIdx++
+						arrayLen--
+						continue
+					}
+				}
+				if isBulkString {
+					isBulkString = !isBulkString
+				} else {
+					break
+				}
+			}
+			lIdx++
+		}
+
+		lastIndex := lIdx + 1
+		if isArray {
+			lastIndex--
+		}
+
+		itemBytes := payload[fIdx:lastIndex]
+		itemBytesLen := len(itemBytes)
+
+		switch itemBytes[0] {
+		case '+':
+			s, err := decodeSimpleString(itemBytesLen, itemBytes)
+			if err != nil {
+				return []any{}, err
+			}
+			array = append(array, s)
+		case '-':
+			errString, err := decodeErrorString(itemBytesLen, itemBytes)
+			if err != nil {
+				return []any{}, err
+			}
+			array = append(array, errors.New(errString))
+		case ':':
+			integer, err := decodeInteger(itemBytesLen, itemBytes)
+			if err != nil {
+				return []any{}, err
+			}
+			array = append(array, integer)
+		case '$':
+			if itemBytes[1] == '-' {
+				err := decodeNullBulkString(itemBytesLen, itemBytes)
+				if err != nil {
+					return []any{}, err
+				}
+				array = append(array, nil)
+			} else {
+				bulkString, err := decodeBulkString(itemBytesLen, itemBytes)
+				if err != nil {
+					return []any{}, err
+				}
+				array = append(array, bulkString)
+			}
+		case '*':
+			if itemBytes[1] == '-' {
+				err := decodeNullArray(itemBytesLen, itemBytes)
+				if err != nil {
+					return []any{}, err
+				}
+				array = append(array, nil)
+			} else {
+				arr, err := decodeArray(itemBytesLen, itemBytes)
+				if err != nil {
+					return []any{}, err
+				}
+				array = append(array, arr)
+			}
+		}
+		pos = lIdx + 1
+	}
+
+	if len(array) != size {
+		return []any{}, fmt.Errorf("array element count mismatch: declared %d, got %d", size, len(array))
+	}
+
+	return array, nil
+}
+
+func decodeNullArray(bufLen int, buf []byte) error {
+	if bufLen != 5 {
+		return fmt.Errorf("invalid null array: expected exactly 5 bytes, got %d", bufLen)
+	}
+	if buf[0] != '*' || buf[1] != '-' || buf[2] != '1' || buf[3] != '\r' || buf[4] != '\n' {
+		return fmt.Errorf("invalid null array: expected \"*-1\\r\\n\", got %q", buf)
+	}
+	return nil
+}
+
+func calculateDigitsAndSize(buf []byte) (digits, size int, err error) {
+	for _, v := range buf {
+		if v == '\r' {
+			break
+		}
+		if v < '0' || v > '9' {
+			return 0, 0, fmt.Errorf("invalid character in bulk string length: %q", v)
+		}
+		size = (size * 10) + int(v-'0')
+		digits++
+	}
+	return digits, size, nil
 }

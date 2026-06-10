@@ -114,12 +114,18 @@ func ExampleDecode() {
 	fmt.Printf("%q\n", s)
 	null, _ := Decode[nullBulkString]([]byte("$-1\r\n"))
 	fmt.Printf("%v\n", null == Null)
+	arr, _ := Decode[[]any]([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
+	fmt.Printf("%v\n", arr)
+	nullArr, _ := Decode[nullArray]([]byte("*-1\r\n"))
+	fmt.Printf("%v\n", nullArr == NullArr)
 
 	// Output:
 	// "OK"
 	// "ERR unknown command"
 	// 42
 	// "hello"
+	// true
+	// [1 2 3]
 	// true
 }
 
@@ -133,6 +139,9 @@ func BenchmarkDecode(b *testing.B) {
 		{"integer", func() { _, _ = Decode[int]([]byte(":42\r\n")) }},
 		{"bulk string", func() { _, _ = Decode[string]([]byte("$5\r\nhello\r\n")) }},
 		{"null bulk string", func() { _, _ = Decode[nullBulkString]([]byte("$-1\r\n")) }},
+		{"null array", func() { _, _ = Decode[nullArray]([]byte("*-1\r\n")) }},
+		{"array integers", func() { _, _ = Decode[[]any]([]byte("*3\r\n:1\r\n:2\r\n:3\r\n")) }},
+		{"array bulk strings", func() { _, _ = Decode[[]any]([]byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n")) }},
 	}
 
 	for _, c := range cases {
@@ -689,6 +698,149 @@ func TestDecode(t *testing.T) {
 			t.Error("expected error for non-null bulk string, got nil")
 		}
 	})
+
+	t.Run("null array - decodes correctly", func(t *testing.T) {
+		got, err := Decode[nullArray]([]byte("*-1\r\n"))
+		assertNoError(t, err)
+		if got != NullArr {
+			t.Errorf("expected NullArr, got %v", got)
+		}
+	})
+
+	t.Run("null array - wrong prefix returns error", func(t *testing.T) {
+		_, err := Decode[nullArray]([]byte("+OK\r\n"))
+		if err == nil {
+			t.Error("expected error for wrong prefix, got nil")
+		}
+	})
+
+	t.Run("null array - non-null payload returns error", func(t *testing.T) {
+		_, err := Decode[nullArray]([]byte("*2\r\n+OK\r\n+OK\r\n"))
+		if err == nil {
+			t.Error("expected error for non-null array, got nil")
+		}
+	})
+
+	// *0\r\n
+	t.Run("array - empty", func(t *testing.T) {
+		got, err := Decode[[]any]([]byte("*0\r\n"))
+		assertNoError(t, err)
+		if len(got) != 0 {
+			t.Errorf("expected empty slice, got %v", got)
+		}
+	})
+
+	// *3\r\n:1\r\n:2\r\n:3\r\n
+	t.Run("array - integers", func(t *testing.T) {
+		got, err := Decode[[]any]([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
+		assertNoError(t, err)
+		if len(got) != 3 {
+			t.Fatalf("expected 3 elements, got %d", len(got))
+		}
+		if got[0] != 1 || got[1] != 2 || got[2] != 3 {
+			t.Errorf("expected [1 2 3], got %v", got)
+		}
+	})
+
+	// *2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n
+	t.Run("array - bulk strings", func(t *testing.T) {
+		got, err := Decode[[]any]([]byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"))
+		assertNoError(t, err)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 elements, got %d", len(got))
+		}
+		if got[0] != "foo" || got[1] != "bar" {
+			t.Errorf("expected [foo bar], got %v", got)
+		}
+	})
+
+	// *5\r\n:1\r\n:2\r\n:3\r\n:4\r\n$6\r\nfoobar\r\n
+	t.Run("array - mixed types", func(t *testing.T) {
+		got, err := Decode[[]any]([]byte("*5\r\n:1\r\n:2\r\n:3\r\n:4\r\n$6\r\nfoobar\r\n"))
+		assertNoError(t, err)
+		if len(got) != 5 {
+			t.Fatalf("expected 5 elements, got %d", len(got))
+		}
+		if got[0] != 1 || got[1] != 2 || got[2] != 3 || got[3] != 4 {
+			t.Errorf("expected integers [1 2 3 4], got %v", got[:4])
+		}
+		if got[4] != "foobar" {
+			t.Errorf("expected bulk string \"foobar\", got %v", got[4])
+		}
+	})
+
+	// *3\r\n+OK\r\n-ERR\r\n:42\r\n
+	t.Run("array - simple string, error, and int", func(t *testing.T) {
+		got, err := Decode[[]any]([]byte("*3\r\n+OK\r\n-ERR\r\n:42\r\n"))
+		assertNoError(t, err)
+		if len(got) != 3 {
+			t.Fatalf("expected 3 elements, got %d", len(got))
+		}
+		if got[0] != SimpleString("OK") {
+			t.Errorf("element 0: expected SimpleString(\"OK\"), got %v", got[0])
+		}
+		if got[1].(error).Error() != "ERR" {
+			t.Errorf("element 1: expected error \"ERR\", got %v", got[1])
+		}
+		if got[2] != 42 {
+			t.Errorf("element 2: expected 42, got %v", got[2])
+		}
+	})
+
+	// *2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n
+	t.Run("array - nested arrays", func(t *testing.T) {
+		got, err := Decode[[]any]([]byte("*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n"))
+		assertNoError(t, err)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 elements, got %d", len(got))
+		}
+		inner1, ok := got[0].([]any)
+		if !ok {
+			t.Fatalf("element 0: expected []any, got %T", got[0])
+		}
+		if len(inner1) != 3 || inner1[0] != 1 || inner1[1] != 2 || inner1[2] != 3 {
+			t.Errorf("inner array 0: expected [1 2 3], got %v", inner1)
+		}
+		inner2, ok := got[1].([]any)
+		if !ok {
+			t.Fatalf("element 1: expected []any, got %T", got[1])
+		}
+		if len(inner2) != 2 || inner2[0] != SimpleString("Foo") || inner2[1].(error).Error() != "Bar" {
+			t.Errorf("inner array 1: expected [Foo Bar], got %v", inner2)
+		}
+	})
+
+	// *3\r\n$3\r\nfoo\r\n$-1\r\n$3\r\nbar\r\n — null element in array decodes as nil
+	t.Run("array - null element", func(t *testing.T) {
+		got, err := Decode[[]any]([]byte("*3\r\n$3\r\nfoo\r\n$-1\r\n$3\r\nbar\r\n"))
+		assertNoError(t, err)
+		if len(got) != 3 {
+			t.Fatalf("expected 3 elements, got %d", len(got))
+		}
+		if got[0] != "foo" {
+			t.Errorf("element 0: expected \"foo\", got %v", got[0])
+		}
+		if got[1] != nil {
+			t.Errorf("element 1: expected nil for null bulk string, got %v", got[1])
+		}
+		if got[2] != "bar" {
+			t.Errorf("element 2: expected \"bar\", got %v", got[2])
+		}
+	})
+
+	t.Run("array - wrong prefix returns error", func(t *testing.T) {
+		_, err := Decode[[]any]([]byte("+OK\r\n"))
+		if err == nil {
+			t.Error("expected error for wrong prefix, got nil")
+		}
+	})
+
+	t.Run("array - empty buffer returns error", func(t *testing.T) {
+		_, err := Decode[[]any]([]byte{})
+		if err == nil {
+			t.Error("expected error for empty buffer, got nil")
+		}
+	})
 }
 
 func TestDecodeMalformedFrames(t *testing.T) {
@@ -698,6 +850,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 			"bare CR":            []byte("+OK\rjunk"),
 			"trailing bytes":     []byte("+OK\r\njunk"),
 			"embedded LF":        []byte("+O\nK\r\n"),
+			"embedded CR":        []byte("+O\rK\r\n"),
 		}
 
 		for name, input := range cases {
@@ -716,6 +869,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 			"bare CR":            []byte("-ERR\rjunk"),
 			"trailing bytes":     []byte("-ERR\r\njunk"),
 			"embedded LF":        []byte("-E\nRR\r\n"),
+			"embedded CR":        []byte("-E\rRR\r\n"),
 		}
 
 		for name, input := range cases {
@@ -763,6 +917,63 @@ func TestDecodeMalformedFrames(t *testing.T) {
 				_, err := Decode[string](input)
 				if err == nil {
 					t.Fatalf("expected error for malformed bulk string %q", input)
+				}
+			})
+		}
+	})
+
+	t.Run("null bulk string rejects malformed frames", func(t *testing.T) {
+		cases := map[string][]byte{
+			"missing terminator": []byte("$-1"),
+			"wrong count":        []byte("$-2\r\n"),
+			"positive count":     []byte("$5\r\nhello\r\n"),
+			"wrong prefix":       []byte("*-1\r\n"),
+			"empty buf":          {},
+		}
+
+		for name, input := range cases {
+			t.Run(name, func(t *testing.T) {
+				_, err := Decode[nullBulkString](input)
+				if err == nil {
+					t.Fatalf("expected error for malformed null bulk string %q", input)
+				}
+			})
+		}
+	})
+
+	t.Run("null array rejects malformed frames", func(t *testing.T) {
+		cases := map[string][]byte{
+			"missing terminator": []byte("*-1"),
+			"wrong count":        []byte("*-2\r\n"),
+			"empty array":        []byte("*0\r\n"),
+			"wrong prefix":       []byte("$-1\r\n"),
+			"empty buf":          {},
+		}
+
+		for name, input := range cases {
+			t.Run(name, func(t *testing.T) {
+				_, err := Decode[nullArray](input)
+				if err == nil {
+					t.Fatalf("expected error for malformed null array %q", input)
+				}
+			})
+		}
+	})
+
+	t.Run("array rejects malformed frames", func(t *testing.T) {
+		cases := map[string][]byte{
+			"wrong prefix":              []byte("+OK\r\n"),
+			"empty buf":                 {},
+			"missing header terminator": []byte("*3"),
+			"non-numeric count":         []byte("*abc\r\n"),
+			"fewer elements than count": []byte("*3\r\n:1\r\n:2\r\n"),
+		}
+
+		for name, input := range cases {
+			t.Run(name, func(t *testing.T) {
+				_, err := Decode[[]any](input)
+				if err == nil {
+					t.Fatalf("expected error for malformed array %q", input)
 				}
 			})
 		}
