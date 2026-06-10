@@ -51,69 +51,72 @@ func AppendEncode(buf []byte, data any) ([]byte, error) {
 //
 // Supported type parameters and the RESP prefix each expects:
 //
-//	Decode[SimpleString] — expects '+' prefix; 1 alloc ([]byte→string copy)
-//	Decode[error]        — expects '-' prefix; 2 allocs (string copy + errors.New)
-//	Decode[int]          — expects ':' prefix; zero-alloc, handles negative values
+//	Decode[SimpleString]   — expects '+' prefix; 1 alloc ([]byte→string copy)
+//	Decode[error]          — expects '-' prefix; 2 allocs (string copy + errors.New)
+//	Decode[int]            — expects ':' prefix; zero-alloc, handles negative values
+//	Decode[string]         — expects '$' prefix; decodes bulk string payload
+//	Decode[nullBulkString] — expects exactly "$-1\r\n"; zero-alloc
 //
 // Returns (zero, error) on a missing or wrong type prefix, a buffer that is
-// too short, or an invalid character in the data. Panics for unsupported
-// type parameters.
+// too short, a length mismatch, or an invalid character in the data. Panics
+// for unsupported type parameters.
 //
 // All cases validate the "\r\n" terminator at the end of the buffer. SimpleString
 // and error additionally reject embedded CR or LF in the payload.
 func Decode[T any](buf []byte) (T, error) {
 	var t T
+	bufLen := len(buf)
 
 	switch any((*T)(nil)).(type) {
 	case *SimpleString:
-		if len(buf) < 3 {
-			return t, fmt.Errorf("buffer too short for SimpleString: need at least 3 bytes, got %d", len(buf))
+		if bufLen < 3 {
+			return t, fmt.Errorf("buffer too short for SimpleString: need at least 3 bytes, got %d", bufLen)
 		}
 		if buf[0] != '+' {
 			return t, fmt.Errorf("invalid type prefix for SimpleString: expected '+', got %q", buf[0])
 		}
-		if buf[len(buf)-2] != '\r' || buf[len(buf)-1] != '\n' {
+		if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
 			return t, fmt.Errorf("simple string missing CRLF terminator")
 		}
 
-		payload := buf[1 : len(buf)-2]
+		payload := buf[1 : bufLen-2]
 		if bytes.ContainsAny(payload, "\r\n") {
 			return t, fmt.Errorf("simple string must not contain CR or LF characters")
 		}
 		return any(SimpleString(payload)).(T), nil
 
 	case *error:
-		if len(buf) < 3 {
-			return t, fmt.Errorf("buffer too short for error: need at least 3 bytes, got %d", len(buf))
+		if bufLen < 3 {
+			return t, fmt.Errorf("buffer too short for error: need at least 3 bytes, got %d", bufLen)
 		}
 		if buf[0] != '-' {
 			return t, fmt.Errorf("invalid type prefix for error: expected '-', got %q", buf[0])
 		}
-		if buf[len(buf)-2] != '\r' || buf[len(buf)-1] != '\n' {
+		if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
 			return t, fmt.Errorf("error string missing CRLF terminator")
 		}
 
-		payload := buf[1 : len(buf)-2]
+		payload := buf[1 : bufLen-2]
 		if bytes.ContainsAny(payload, "\r\n") {
 			return t, fmt.Errorf("error string must not contain CR or LF characters")
 		}
 		return any(errors.New(string(payload))).(T), nil
 
 	case *int:
-		if len(buf) < 4 {
-			return t, fmt.Errorf("buffer too short for int: need at least 4 bytes, got %d", len(buf))
+		if bufLen < 4 {
+			return t, fmt.Errorf("buffer too short for int: need at least 4 bytes, got %d", bufLen)
 		}
 		if buf[0] != ':' {
 			return t, fmt.Errorf("invalid type prefix for int: expected ':', got %q", buf[0])
 		}
-		if buf[len(buf)-2] != '\r' || buf[len(buf)-1] != '\n' {
+		if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
 			return t, fmt.Errorf("integer frame missing CRLF terminator")
 		}
 
 		// isNeg is a sign multiplier: -1 for negative numbers, 1 for positive
 		isNeg := 1
 		num := 0
-		payload := buf[1 : len(buf)-2]
+		payload := buf[1 : bufLen-2]
 
 		if len(payload) == 0 {
 			return t, fmt.Errorf("integer has no digit characters")
@@ -133,6 +136,67 @@ func Decode[T any](buf []byte) (T, error) {
 			num = (num * 10) + int(b-'0')
 		}
 		return any(isNeg * num).(T), nil
+
+	case *string:
+		if bufLen < 5 {
+			return t, fmt.Errorf("buffer too short for bulk string: need at least 5 bytes, got %d", bufLen)
+		}
+		if buf[0] != '$' {
+			return t, fmt.Errorf("invalid type prefix for bulk string: expected '$', got %q", buf[0])
+		}
+		if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
+			return t, fmt.Errorf("bulk string missing CRLF terminator")
+		}
+
+		digits := 0
+		var size int
+
+		for _, v := range buf[1:] {
+			if v == '\r' {
+				break
+			}
+			if v < '0' || v > '9' {
+				return t, fmt.Errorf("invalid character in bulk string length: %q", v)
+			}
+			size = (size * 10) + int(v-'0')
+			digits++
+		}
+
+		if size == 0 {
+			if buf[bufLen-4] != '\r' || buf[bufLen-3] != '\n' {
+				return t, fmt.Errorf("empty bulk string missing inner CRLF terminator")
+			}
+			return any("").(T), nil
+		}
+
+		payload := buf[digits+3 : bufLen-2]
+		if len(payload) != size {
+			return t, fmt.Errorf("bulk string length mismatch: declared %d, got %d", size, len(payload))
+		}
+
+		return any(string(payload)).(T), nil
+
+	case *nullBulkString:
+		if bufLen != 5 {
+			return t, fmt.Errorf("")
+		}
+		if buf[0] != '$' {
+			return t, fmt.Errorf("")
+		}
+		if buf[1] != '-' {
+			return t, fmt.Errorf("")
+		}
+		if buf[2] != '1' {
+			return t, fmt.Errorf("")
+		}
+		if buf[3] != '\r' {
+			return t, fmt.Errorf("")
+		}
+		if buf[4] != '\n' {
+			return t, fmt.Errorf("")
+		}
+
+		return t, nil
 
 	default:
 		panic("unsupported type")

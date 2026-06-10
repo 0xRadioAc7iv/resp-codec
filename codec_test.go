@@ -110,11 +110,17 @@ func ExampleDecode() {
 	fmt.Printf("%q\n", e.Error())
 	n, _ := Decode[int]([]byte(":42\r\n"))
 	fmt.Printf("%d\n", n)
+	s, _ := Decode[string]([]byte("$5\r\nhello\r\n"))
+	fmt.Printf("%q\n", s)
+	null, _ := Decode[nullBulkString]([]byte("$-1\r\n"))
+	fmt.Printf("%v\n", null == Null)
 
 	// Output:
 	// "OK"
 	// "ERR unknown command"
 	// 42
+	// "hello"
+	// true
 }
 
 func BenchmarkDecode(b *testing.B) {
@@ -125,6 +131,8 @@ func BenchmarkDecode(b *testing.B) {
 		{"simple string", func() { _, _ = Decode[SimpleString]([]byte("+OK\r\n")) }},
 		{"error", func() { _, _ = Decode[error]([]byte("-ERR unknown command\r\n")) }},
 		{"integer", func() { _, _ = Decode[int]([]byte(":42\r\n")) }},
+		{"bulk string", func() { _, _ = Decode[string]([]byte("$5\r\nhello\r\n")) }},
+		{"null bulk string", func() { _, _ = Decode[nullBulkString]([]byte("$-1\r\n")) }},
 	}
 
 	for _, c := range cases {
@@ -606,6 +614,81 @@ func TestDecode(t *testing.T) {
 			t.Error("expected error for empty buffer, got nil")
 		}
 	})
+
+	t.Run("bulk string - normal", func(t *testing.T) {
+		got, err := Decode[string]([]byte("$6\r\nfoobar\r\n"))
+		assertNoError(t, err)
+		if got != "foobar" {
+			t.Errorf("expected %q, got %q", "foobar", got)
+		}
+	})
+
+	t.Run("bulk string - empty", func(t *testing.T) {
+		got, err := Decode[string]([]byte("$0\r\n\r\n"))
+		assertNoError(t, err)
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("bulk string - with spaces", func(t *testing.T) {
+		got, err := Decode[string]([]byte("$11\r\nhello world\r\n"))
+		assertNoError(t, err)
+		if got != "hello world" {
+			t.Errorf("expected %q, got %q", "hello world", got)
+		}
+	})
+
+	t.Run("bulk string - binary safe with CRLF in content", func(t *testing.T) {
+		got, err := Decode[string]([]byte("$12\r\nhello\r\nworld\r\n"))
+		assertNoError(t, err)
+		if got != "hello\r\nworld" {
+			t.Errorf("expected %q, got %q", "hello\r\nworld", got)
+		}
+	})
+
+	t.Run("bulk string - length mismatch returns error", func(t *testing.T) {
+		_, err := Decode[string]([]byte("$3\r\nhello\r\n"))
+		if err == nil {
+			t.Error("expected error for length mismatch, got nil")
+		}
+	})
+
+	t.Run("bulk string - wrong prefix returns error", func(t *testing.T) {
+		_, err := Decode[string]([]byte("+OK\r\n"))
+		if err == nil {
+			t.Error("expected error for wrong prefix, got nil")
+		}
+	})
+
+	t.Run("bulk string - empty buffer returns error", func(t *testing.T) {
+		_, err := Decode[string]([]byte{})
+		if err == nil {
+			t.Error("expected error for empty buffer, got nil")
+		}
+	})
+
+	t.Run("null bulk string - decodes correctly", func(t *testing.T) {
+		got, err := Decode[nullBulkString]([]byte("$-1\r\n"))
+		assertNoError(t, err)
+		if got != Null {
+			t.Errorf("expected Null, got %v", got)
+		}
+	})
+
+	t.Run("null bulk string - wrong prefix returns error", func(t *testing.T) {
+		_, err := Decode[nullBulkString]([]byte("+OK\r\n"))
+		if err == nil {
+			t.Error("expected error for wrong prefix, got nil")
+		}
+	})
+
+	t.Run("null bulk string - non-null payload returns error", func(t *testing.T) {
+		_, err := Decode[nullBulkString]([]byte("$6\r\nfoobar\r\n"))
+		if err == nil {
+			t.Error("expected error for non-null bulk string, got nil")
+		}
+	})
 }
 
 func TestDecodeMalformedFrames(t *testing.T) {
@@ -660,6 +743,26 @@ func TestDecodeMalformedFrames(t *testing.T) {
 				_, err := Decode[int](input)
 				if err == nil {
 					t.Fatalf("expected error for malformed integer %q", input)
+				}
+			})
+		}
+	})
+
+	t.Run("bulk string rejects malformed frames", func(t *testing.T) {
+		cases := map[string][]byte{
+			"missing terminator":   []byte("$6\r\nfoobar"),
+			"length mismatch low":  []byte("$3\r\nfoobar\r\n"),
+			"length mismatch high": []byte("$9\r\nfoobar\r\n"),
+			"non-numeric length":   []byte("$abc\r\nfoobar\r\n"),
+			"wrong prefix":         []byte("+foobar\r\n"),
+			"empty buf":            {},
+		}
+
+		for name, input := range cases {
+			t.Run(name, func(t *testing.T) {
+				_, err := Decode[string](input)
+				if err == nil {
+					t.Fatalf("expected error for malformed bulk string %q", input)
 				}
 			})
 		}
