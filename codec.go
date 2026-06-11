@@ -51,15 +51,13 @@ func AppendEncode(buf []byte, data any) ([]byte, error) {
 //
 // Supported type parameters and the RESP prefix each expects:
 //
-//	Decode[SimpleString]   — expects '+' prefix; 1 alloc ([]byte→string copy)
-//	Decode[error]          — expects '-' prefix; 2 allocs (string copy + errors.New)
-//	Decode[int]            — expects ':' prefix; zero-alloc, handles negative values
-//	Decode[string]         — expects '$' prefix; decodes bulk string payload
-//	Decode[nullBulkString] — expects exactly "$-1\r\n"; zero-alloc
-//	Decode[[]any]          — expects '*' prefix; decodes elements recursively into a
-//	                         slice of mixed types; null elements ($-1\r\n, *-1\r\n)
-//	                         are decoded as nil
-//	Decode[nullArray]      — expects exactly "*-1\r\n"; zero-alloc
+//	Decode[SimpleString] — expects '+' prefix; 1 alloc ([]byte→string copy)
+//	Decode[error]        — expects '-' prefix; 2 allocs (string copy + errors.New)
+//	Decode[int]          — expects ':' prefix; zero-alloc, handles negative values
+//	Decode[string]       — expects '$' prefix; decodes bulk string payload
+//	Decode[[]any]        — expects '*' prefix; decodes elements recursively into a
+//	                       slice of mixed types; null elements ($-1\r\n, *-1\r\n)
+//	                       are decoded as nil
 //
 // Returns (zero, error) on a missing or wrong type prefix, a buffer that is
 // too short, a length mismatch, or an invalid character in the data. Panics
