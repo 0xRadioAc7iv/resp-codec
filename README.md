@@ -49,20 +49,32 @@ buf, err  = respcodec.AppendEncode(buf, 42)
 
 ### Decode
 
+Each RESP type has its own decode function. Call the one that matches the wire prefix you expect:
+
 ```go
-s, err   := respcodec.Decode[respcodec.SimpleString]([]byte("+OK\r\n"))
-e, err   := respcodec.Decode[error]([]byte("-ERR unknown\r\n"))
-n, err   := respcodec.Decode[int]([]byte(":42\r\n"))
-str, err := respcodec.Decode[string]([]byte("$5\r\nhello\r\n"))
-arr, err := respcodec.Decode[[]any]([]byte("*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n"))
+ss,  err := respcodec.DecodeSimpleString([]byte("+OK\r\n"))
+msg, err := respcodec.DecodeErrorString([]byte("-ERR unknown\r\n")) // returns string, not error
+n,   err := respcodec.DecodeInteger([]byte(":42\r\n"))
+s,   err := respcodec.DecodeBulkString([]byte("$5\r\nhello\r\n"))
+arr, err := respcodec.DecodeArray([]byte("*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n"))
+err       = respcodec.DecodeNullBulkString([]byte("$-1\r\n"))
+err       = respcodec.DecodeNullArray([]byte("*-1\r\n"))
 ```
+
+`DecodeErrorString` returns the message text as a `string`. Wrap it with `errors.New` if you need an `error` value.
 
 ## Testing
 
 Run the test suite:
 
 ```sh
-go test ./...
+make test
+```
+
+with coverage:
+
+```sh
+make test-cov
 ```
 
 ## Benchmarks
@@ -70,7 +82,7 @@ go test ./...
 Run benchmarks:
 
 ```sh
-go test -bench=. -benchmem ./...
+make bench
 ```
 
 ## License

@@ -103,21 +103,21 @@ func BenchmarkAppendEncode(b *testing.B) {
 	}
 }
 
-func ExampleDecode() {
-	ss, _ := Decode[SimpleString]([]byte("+OK\r\n"))
+func Example_decode() {
+	ss, _ := DecodeSimpleString([]byte("+OK\r\n"))
 	fmt.Printf("%q\n", ss)
-	e, _ := Decode[error]([]byte("-ERR unknown command\r\n"))
-	fmt.Printf("%q\n", e.Error())
-	n, _ := Decode[int]([]byte(":42\r\n"))
+	e, _ := DecodeErrorString([]byte("-ERR unknown command\r\n"))
+	fmt.Printf("%q\n", e)
+	n, _ := DecodeInteger([]byte(":42\r\n"))
 	fmt.Printf("%d\n", n)
-	s, _ := Decode[string]([]byte("$5\r\nhello\r\n"))
+	s, _ := DecodeBulkString([]byte("$5\r\nhello\r\n"))
 	fmt.Printf("%q\n", s)
-	null, _ := Decode[nullBulkString]([]byte("$-1\r\n"))
-	fmt.Printf("%v\n", null == Null)
-	arr, _ := Decode[[]any]([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
+	err := DecodeNullBulkString([]byte("$-1\r\n"))
+	fmt.Printf("%v\n", err == nil)
+	arr, _ := DecodeArray([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
 	fmt.Printf("%v\n", arr)
-	nullArr, _ := Decode[nullArray]([]byte("*-1\r\n"))
-	fmt.Printf("%v\n", nullArr == NullArr)
+	err = DecodeNullArray([]byte("*-1\r\n"))
+	fmt.Printf("%v\n", err == nil)
 
 	// Output:
 	// "OK"
@@ -131,23 +131,24 @@ func ExampleDecode() {
 
 func BenchmarkDecode(b *testing.B) {
 	cases := []struct {
-		name string
-		fn   func()
+		name  string
+		input []byte
+		fn    func([]byte)
 	}{
-		{"simple string", func() { _, _ = Decode[SimpleString]([]byte("+OK\r\n")) }},
-		{"error", func() { _, _ = Decode[error]([]byte("-ERR unknown command\r\n")) }},
-		{"integer", func() { _, _ = Decode[int]([]byte(":42\r\n")) }},
-		{"bulk string", func() { _, _ = Decode[string]([]byte("$5\r\nhello\r\n")) }},
-		{"null bulk string", func() { _, _ = Decode[nullBulkString]([]byte("$-1\r\n")) }},
-		{"null array", func() { _, _ = Decode[nullArray]([]byte("*-1\r\n")) }},
-		{"array integers", func() { _, _ = Decode[[]any]([]byte("*3\r\n:1\r\n:2\r\n:3\r\n")) }},
-		{"array bulk strings", func() { _, _ = Decode[[]any]([]byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n")) }},
+		{"simple string", []byte("+OK\r\n"), func(b []byte) { _, _ = DecodeSimpleString(b) }},
+		{"error", []byte("-ERR unknown command\r\n"), func(b []byte) { _, _ = DecodeErrorString(b) }},
+		{"integer", []byte(":42\r\n"), func(b []byte) { _, _ = DecodeInteger(b) }},
+		{"bulk string", []byte("$5\r\nhello\r\n"), func(b []byte) { _, _ = DecodeBulkString(b) }},
+		{"null bulk string", []byte("$-1\r\n"), func(b []byte) { _ = DecodeNullBulkString(b) }},
+		{"null array", []byte("*-1\r\n"), func(b []byte) { _ = DecodeNullArray(b) }},
+		{"array integers", []byte("*3\r\n:1\r\n:2\r\n:3\r\n"), func(b []byte) { _, _ = DecodeArray(b) }},
+		{"array bulk strings", []byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"), func(b []byte) { _, _ = DecodeArray(b) }},
 	}
 
 	for _, c := range cases {
 		b.Run(c.name, func(b *testing.B) {
 			for b.Loop() {
-				c.fn()
+				c.fn(c.input)
 			}
 		})
 	}
@@ -478,7 +479,7 @@ func TestEncode(t *testing.T) {
 
 func TestDecode(t *testing.T) {
 	t.Run("simple string - ok", func(t *testing.T) {
-		got, err := Decode[SimpleString]([]byte("+OK\r\n"))
+		got, err := DecodeSimpleString([]byte("+OK\r\n"))
 		assertNoError(t, err)
 		if got != SimpleString("OK") {
 			t.Errorf("expected %q, got %q", SimpleString("OK"), got)
@@ -486,7 +487,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("simple string - empty", func(t *testing.T) {
-		got, err := Decode[SimpleString]([]byte("+\r\n"))
+		got, err := DecodeSimpleString([]byte("+\r\n"))
 		assertNoError(t, err)
 		if got != SimpleString("") {
 			t.Errorf("expected empty SimpleString, got %q", got)
@@ -494,7 +495,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("simple string - multi word", func(t *testing.T) {
-		got, err := Decode[SimpleString]([]byte("+hello world\r\n"))
+		got, err := DecodeSimpleString([]byte("+hello world\r\n"))
 		assertNoError(t, err)
 		if got != SimpleString("hello world") {
 			t.Errorf("expected %q, got %q", SimpleString("hello world"), got)
@@ -502,59 +503,59 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("simple string - wrong prefix returns error", func(t *testing.T) {
-		_, err := Decode[SimpleString]([]byte("-ERR\r\n"))
+		_, err := DecodeSimpleString([]byte("-ERR\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("simple string - empty buffer returns error", func(t *testing.T) {
-		_, err := Decode[SimpleString]([]byte{})
+		_, err := DecodeSimpleString([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
 		}
 	})
 
 	t.Run("error - basic message", func(t *testing.T) {
-		got, err := Decode[error]([]byte("-ERR unknown command\r\n"))
+		got, err := DecodeErrorString([]byte("-ERR unknown command\r\n"))
 		assertNoError(t, err)
-		if got.Error() != "ERR unknown command" {
-			t.Errorf("expected %q, got %q", "ERR unknown command", got.Error())
+		if got != "ERR unknown command" {
+			t.Errorf("expected %q, got %q", "ERR unknown command", got)
 		}
 	})
 
 	t.Run("error - empty message", func(t *testing.T) {
-		got, err := Decode[error]([]byte("-\r\n"))
+		got, err := DecodeErrorString([]byte("-\r\n"))
 		assertNoError(t, err)
-		if got.Error() != "" {
-			t.Errorf("expected empty error message, got %q", got.Error())
+		if got != "" {
+			t.Errorf("expected empty error message, got %q", got)
 		}
 	})
 
 	t.Run("error - WRONGTYPE prefix", func(t *testing.T) {
-		got, err := Decode[error]([]byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"))
+		got, err := DecodeErrorString([]byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"))
 		assertNoError(t, err)
-		if got.Error() != "WRONGTYPE Operation against a key holding the wrong kind of value" {
-			t.Errorf("unexpected error message: %q", got.Error())
+		if got != "WRONGTYPE Operation against a key holding the wrong kind of value" {
+			t.Errorf("unexpected error message: %q", got)
 		}
 	})
 
 	t.Run("error - wrong prefix returns error", func(t *testing.T) {
-		_, err := Decode[error]([]byte("+OK\r\n"))
+		_, err := DecodeErrorString([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("error - empty buffer returns error", func(t *testing.T) {
-		_, err := Decode[error]([]byte{})
+		_, err := DecodeErrorString([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
 		}
 	})
 
 	t.Run("integer - positive", func(t *testing.T) {
-		got, err := Decode[int]([]byte(":42\r\n"))
+		got, err := DecodeInteger([]byte(":42\r\n"))
 		assertNoError(t, err)
 		if got != 42 {
 			t.Errorf("expected 42, got %d", got)
@@ -562,7 +563,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("integer - zero", func(t *testing.T) {
-		got, err := Decode[int]([]byte(":0\r\n"))
+		got, err := DecodeInteger([]byte(":0\r\n"))
 		assertNoError(t, err)
 		if got != 0 {
 			t.Errorf("expected 0, got %d", got)
@@ -570,7 +571,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("integer - negative", func(t *testing.T) {
-		got, err := Decode[int]([]byte(":-1\r\n"))
+		got, err := DecodeInteger([]byte(":-1\r\n"))
 		assertNoError(t, err)
 		if got != -1 {
 			t.Errorf("expected -1, got %d", got)
@@ -578,7 +579,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("integer - large value", func(t *testing.T) {
-		got, err := Decode[int]([]byte(":1000000\r\n"))
+		got, err := DecodeInteger([]byte(":1000000\r\n"))
 		assertNoError(t, err)
 		if got != 1000000 {
 			t.Errorf("expected 1000000, got %d", got)
@@ -587,7 +588,7 @@ func TestDecode(t *testing.T) {
 
 	t.Run("integer - max int", func(t *testing.T) {
 		buf := fmt.Appendf(nil, ":%d\r\n", math.MaxInt)
-		got, err := Decode[int](buf)
+		got, err := DecodeInteger(buf)
 		assertNoError(t, err)
 		if got != math.MaxInt {
 			t.Errorf("expected %d, got %d", math.MaxInt, got)
@@ -596,7 +597,7 @@ func TestDecode(t *testing.T) {
 
 	t.Run("integer - min int", func(t *testing.T) {
 		buf := fmt.Appendf(nil, ":%d\r\n", math.MinInt)
-		got, err := Decode[int](buf)
+		got, err := DecodeInteger(buf)
 		assertNoError(t, err)
 		if got != math.MinInt {
 			t.Errorf("expected %d, got %d", math.MinInt, got)
@@ -604,28 +605,28 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("integer - invalid character returns error", func(t *testing.T) {
-		_, err := Decode[int]([]byte(":abc\r\n"))
+		_, err := DecodeInteger([]byte(":abc\r\n"))
 		if err == nil {
 			t.Error("expected error for non-digit character, got nil")
 		}
 	})
 
 	t.Run("integer - wrong prefix returns error", func(t *testing.T) {
-		_, err := Decode[int]([]byte("+OK\r\n"))
+		_, err := DecodeInteger([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("integer - empty buffer returns error", func(t *testing.T) {
-		_, err := Decode[int]([]byte{})
+		_, err := DecodeInteger([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
 		}
 	})
 
 	t.Run("bulk string - normal", func(t *testing.T) {
-		got, err := Decode[string]([]byte("$6\r\nfoobar\r\n"))
+		got, err := DecodeBulkString([]byte("$6\r\nfoobar\r\n"))
 		assertNoError(t, err)
 		if got != "foobar" {
 			t.Errorf("expected %q, got %q", "foobar", got)
@@ -633,7 +634,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("bulk string - empty", func(t *testing.T) {
-		got, err := Decode[string]([]byte("$0\r\n\r\n"))
+		got, err := DecodeBulkString([]byte("$0\r\n\r\n"))
 		assertNoError(t, err)
 		if got != "" {
 			t.Errorf("expected empty string, got %q", got)
@@ -641,7 +642,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("bulk string - with spaces", func(t *testing.T) {
-		got, err := Decode[string]([]byte("$11\r\nhello world\r\n"))
+		got, err := DecodeBulkString([]byte("$11\r\nhello world\r\n"))
 		assertNoError(t, err)
 		if got != "hello world" {
 			t.Errorf("expected %q, got %q", "hello world", got)
@@ -649,7 +650,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("bulk string - binary safe with CRLF in content", func(t *testing.T) {
-		got, err := Decode[string]([]byte("$12\r\nhello\r\nworld\r\n"))
+		got, err := DecodeBulkString([]byte("$12\r\nhello\r\nworld\r\n"))
 		assertNoError(t, err)
 		if got != "hello\r\nworld" {
 			t.Errorf("expected %q, got %q", "hello\r\nworld", got)
@@ -657,65 +658,59 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("bulk string - length mismatch returns error", func(t *testing.T) {
-		_, err := Decode[string]([]byte("$3\r\nhello\r\n"))
+		_, err := DecodeBulkString([]byte("$3\r\nhello\r\n"))
 		if err == nil {
 			t.Error("expected error for length mismatch, got nil")
 		}
 	})
 
 	t.Run("bulk string - wrong prefix returns error", func(t *testing.T) {
-		_, err := Decode[string]([]byte("+OK\r\n"))
+		_, err := DecodeBulkString([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("bulk string - empty buffer returns error", func(t *testing.T) {
-		_, err := Decode[string]([]byte{})
+		_, err := DecodeBulkString([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
 		}
 	})
 
 	t.Run("null bulk string - decodes correctly", func(t *testing.T) {
-		got, err := Decode[nullBulkString]([]byte("$-1\r\n"))
+		err := DecodeNullBulkString([]byte("$-1\r\n"))
 		assertNoError(t, err)
-		if got != Null {
-			t.Errorf("expected Null, got %v", got)
-		}
 	})
 
 	t.Run("null bulk string - wrong prefix returns error", func(t *testing.T) {
-		_, err := Decode[nullBulkString]([]byte("+OK\r\n"))
+		err := DecodeNullBulkString([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("null bulk string - non-null payload returns error", func(t *testing.T) {
-		_, err := Decode[nullBulkString]([]byte("$6\r\nfoobar\r\n"))
+		err := DecodeNullBulkString([]byte("$6\r\nfoobar\r\n"))
 		if err == nil {
 			t.Error("expected error for non-null bulk string, got nil")
 		}
 	})
 
 	t.Run("null array - decodes correctly", func(t *testing.T) {
-		got, err := Decode[nullArray]([]byte("*-1\r\n"))
+		err := DecodeNullArray([]byte("*-1\r\n"))
 		assertNoError(t, err)
-		if got != NullArr {
-			t.Errorf("expected NullArr, got %v", got)
-		}
 	})
 
 	t.Run("null array - wrong prefix returns error", func(t *testing.T) {
-		_, err := Decode[nullArray]([]byte("+OK\r\n"))
+		err := DecodeNullArray([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("null array - non-null payload returns error", func(t *testing.T) {
-		_, err := Decode[nullArray]([]byte("*2\r\n+OK\r\n+OK\r\n"))
+		err := DecodeNullArray([]byte("*2\r\n+OK\r\n+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for non-null array, got nil")
 		}
@@ -723,7 +718,7 @@ func TestDecode(t *testing.T) {
 
 	// *0\r\n
 	t.Run("array - empty", func(t *testing.T) {
-		got, err := Decode[[]any]([]byte("*0\r\n"))
+		got, err := DecodeArray([]byte("*0\r\n"))
 		assertNoError(t, err)
 		if len(got) != 0 {
 			t.Errorf("expected empty slice, got %v", got)
@@ -732,7 +727,7 @@ func TestDecode(t *testing.T) {
 
 	// *3\r\n:1\r\n:2\r\n:3\r\n
 	t.Run("array - integers", func(t *testing.T) {
-		got, err := Decode[[]any]([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
+		got, err := DecodeArray([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
 		assertNoError(t, err)
 		if len(got) != 3 {
 			t.Fatalf("expected 3 elements, got %d", len(got))
@@ -744,7 +739,7 @@ func TestDecode(t *testing.T) {
 
 	// *2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n
 	t.Run("array - bulk strings", func(t *testing.T) {
-		got, err := Decode[[]any]([]byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"))
+		got, err := DecodeArray([]byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"))
 		assertNoError(t, err)
 		if len(got) != 2 {
 			t.Fatalf("expected 2 elements, got %d", len(got))
@@ -756,7 +751,7 @@ func TestDecode(t *testing.T) {
 
 	// *5\r\n:1\r\n:2\r\n:3\r\n:4\r\n$6\r\nfoobar\r\n
 	t.Run("array - mixed types", func(t *testing.T) {
-		got, err := Decode[[]any]([]byte("*5\r\n:1\r\n:2\r\n:3\r\n:4\r\n$6\r\nfoobar\r\n"))
+		got, err := DecodeArray([]byte("*5\r\n:1\r\n:2\r\n:3\r\n:4\r\n$6\r\nfoobar\r\n"))
 		assertNoError(t, err)
 		if len(got) != 5 {
 			t.Fatalf("expected 5 elements, got %d", len(got))
@@ -771,7 +766,7 @@ func TestDecode(t *testing.T) {
 
 	// *3\r\n+OK\r\n-ERR\r\n:42\r\n
 	t.Run("array - simple string, error, and int", func(t *testing.T) {
-		got, err := Decode[[]any]([]byte("*3\r\n+OK\r\n-ERR\r\n:42\r\n"))
+		got, err := DecodeArray([]byte("*3\r\n+OK\r\n-ERR\r\n:42\r\n"))
 		assertNoError(t, err)
 		if len(got) != 3 {
 			t.Fatalf("expected 3 elements, got %d", len(got))
@@ -789,7 +784,7 @@ func TestDecode(t *testing.T) {
 
 	// *2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n
 	t.Run("array - nested arrays", func(t *testing.T) {
-		got, err := Decode[[]any]([]byte("*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n"))
+		got, err := DecodeArray([]byte("*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n"))
 		assertNoError(t, err)
 		if len(got) != 2 {
 			t.Fatalf("expected 2 elements, got %d", len(got))
@@ -810,9 +805,24 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
+	// *2\r\n*-1\r\n$3\r\nfoo\r\n — null array element decodes as nil
+	t.Run("array - null array element", func(t *testing.T) {
+		got, err := DecodeArray([]byte("*2\r\n*-1\r\n$3\r\nfoo\r\n"))
+		assertNoError(t, err)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 elements, got %d", len(got))
+		}
+		if got[0] != nil {
+			t.Errorf("element 0: expected nil for null array, got %v", got[0])
+		}
+		if got[1] != "foo" {
+			t.Errorf("element 1: expected \"foo\", got %v", got[1])
+		}
+	})
+
 	// *3\r\n$3\r\nfoo\r\n$-1\r\n$3\r\nbar\r\n — null element in array decodes as nil
 	t.Run("array - null element", func(t *testing.T) {
-		got, err := Decode[[]any]([]byte("*3\r\n$3\r\nfoo\r\n$-1\r\n$3\r\nbar\r\n"))
+		got, err := DecodeArray([]byte("*3\r\n$3\r\nfoo\r\n$-1\r\n$3\r\nbar\r\n"))
 		assertNoError(t, err)
 		if len(got) != 3 {
 			t.Fatalf("expected 3 elements, got %d", len(got))
@@ -829,14 +839,14 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("array - wrong prefix returns error", func(t *testing.T) {
-		_, err := Decode[[]any]([]byte("+OK\r\n"))
+		_, err := DecodeArray([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("array - empty buffer returns error", func(t *testing.T) {
-		_, err := Decode[[]any]([]byte{})
+		_, err := DecodeArray([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
 		}
@@ -855,7 +865,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := Decode[SimpleString](input)
+				_, err := DecodeSimpleString(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed simple string %q", input)
 				}
@@ -874,7 +884,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := Decode[error](input)
+				_, err := DecodeErrorString(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed error %q", input)
 				}
@@ -894,7 +904,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := Decode[int](input)
+				_, err := DecodeInteger(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed integer %q", input)
 				}
@@ -904,17 +914,18 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 	t.Run("bulk string rejects malformed frames", func(t *testing.T) {
 		cases := map[string][]byte{
-			"missing terminator":   []byte("$6\r\nfoobar"),
-			"length mismatch low":  []byte("$3\r\nfoobar\r\n"),
-			"length mismatch high": []byte("$9\r\nfoobar\r\n"),
-			"non-numeric length":   []byte("$abc\r\nfoobar\r\n"),
-			"wrong prefix":         []byte("+foobar\r\n"),
-			"empty buf":            {},
+			"missing terminator":        []byte("$6\r\nfoobar"),
+			"length mismatch low":       []byte("$3\r\nfoobar\r\n"),
+			"length mismatch high":      []byte("$9\r\nfoobar\r\n"),
+			"non-numeric length":        []byte("$abc\r\nfoobar\r\n"),
+			"wrong prefix":              []byte("+foobar\r\n"),
+			"empty buf":                 {},
+			"empty string missing CRLF": []byte("$0\r\nXX\r\n"),
 		}
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := Decode[string](input)
+				_, err := DecodeBulkString(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed bulk string %q", input)
 				}
@@ -933,7 +944,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := Decode[nullBulkString](input)
+				err := DecodeNullBulkString(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed null bulk string %q", input)
 				}
@@ -952,7 +963,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := Decode[nullArray](input)
+				err := DecodeNullArray(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed null array %q", input)
 				}
@@ -962,18 +973,47 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 	t.Run("array rejects malformed frames", func(t *testing.T) {
 		cases := map[string][]byte{
-			"wrong prefix":              []byte("+OK\r\n"),
-			"empty buf":                 {},
-			"missing header terminator": []byte("*3"),
-			"non-numeric count":         []byte("*abc\r\n"),
-			"fewer elements than count": []byte("*3\r\n:1\r\n:2\r\n"),
+			"wrong prefix":                    []byte("+OK\r\n"),
+			"empty buf":                       {},
+			"missing header terminator":       []byte("*3"),
+			"non-numeric count":               []byte("*abc\r\n"),
+			"fewer elements than count":       []byte("*3\r\n:1\r\n:2\r\n"),
+			"nested array non-numeric count":  []byte("*1\r\n*X\r\n"),
 		}
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := Decode[[]any](input)
+				_, err := DecodeArray(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed array %q", input)
+				}
+			})
+		}
+	})
+
+	t.Run("array rejects malformed elements", func(t *testing.T) {
+		cases := map[string][]byte{
+			// embedded CR in simple string payload
+			"malformed simple string": []byte("*1\r\n+O\rK\r\n"),
+			// embedded CR in error payload
+			"malformed error": []byte("*1\r\n-E\rRR\r\n"),
+			// non-digit character in integer payload
+			"malformed integer": []byte("*1\r\n:abc\r\n"),
+			// null bulk string with wrong count (-2 instead of -1)
+			"malformed null bulk string": []byte("*1\r\n$-2\r\n"),
+			// bulk string declares length 3 but payload is 6 bytes
+			"malformed bulk string": []byte("*1\r\n$3\r\nfoobar\r\n"),
+			// null array with wrong count (-2 instead of -1)
+			"malformed null array": []byte("*1\r\n*-2\r\n"),
+			// nested array declares 2 elements but only contains 1
+			"malformed nested array": []byte("*1\r\n*2\r\n:1\r\n"),
+		}
+
+		for name, input := range cases {
+			t.Run(name, func(t *testing.T) {
+				_, err := DecodeArray(input)
+				if err == nil {
+					t.Fatalf("expected error for malformed element in array %q", input)
 				}
 			})
 		}

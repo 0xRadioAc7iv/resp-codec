@@ -47,83 +47,6 @@ func AppendEncode(buf []byte, data any) ([]byte, error) {
 	return appendEncode(buf, data)
 }
 
-// Decode parses a RESP-encoded byte slice into a Go value of type T.
-//
-// Supported type parameters and the RESP prefix each expects:
-//
-//	Decode[SimpleString] — expects '+' prefix; 1 alloc ([]byte→string copy)
-//	Decode[error]        — expects '-' prefix; 2 allocs (string copy + errors.New)
-//	Decode[int]          — expects ':' prefix; zero-alloc, handles negative values
-//	Decode[string]       — expects '$' prefix; decodes bulk string payload
-//	Decode[[]any]        — expects '*' prefix; decodes elements recursively into a
-//	                       slice of mixed types; null elements ($-1\r\n, *-1\r\n)
-//	                       are decoded as nil
-//
-// Returns (zero, error) on a missing or wrong type prefix, a buffer that is
-// too short, a length mismatch, or an invalid character in the data. Panics
-// for unsupported type parameters.
-//
-// All cases validate the "\r\n" terminator at the end of the buffer. SimpleString
-// and error additionally reject embedded CR or LF in the payload.
-func Decode[T any](buf []byte) (T, error) {
-	var t T
-	bufLen := len(buf)
-
-	switch any((*T)(nil)).(type) {
-	case *SimpleString:
-		s, err := decodeSimpleString(bufLen, buf)
-		if err != nil {
-			return t, err
-		}
-		return any(s).(T), nil
-
-	case *error:
-		errString, err := decodeErrorString(bufLen, buf)
-		if err != nil {
-			return t, err
-		}
-		return any(errors.New(errString)).(T), nil
-
-	case *int:
-		integer, err := decodeInteger(bufLen, buf)
-		if err != nil {
-			return t, err
-		}
-		return any(integer).(T), nil
-
-	case *string:
-		s, err := decodeBulkString(bufLen, buf)
-		if err != nil {
-			return t, err
-		}
-		return any(s).(T), nil
-
-	case *nullBulkString:
-		err := decodeNullBulkString(bufLen, buf)
-		if err != nil {
-			return t, err
-		}
-		return t, nil
-
-	case *[]any:
-		arr, err := decodeArray(bufLen, buf)
-		if err != nil {
-			return t, err
-		}
-		return any(arr).(T), nil
-
-	case *nullArray:
-		err := decodeNullArray(bufLen, buf)
-		if err != nil {
-			return t, err
-		}
-		return t, nil
-
-	default:
-		panic("unsupported type")
-	}
-}
-
 // appendEncode appends the RESP encoding of data into buf and returns the extended slice.
 // It is the shared append-style core used by Encode and AppendEncode, and called recursively for arrays.
 func appendEncode(buf []byte, data any) ([]byte, error) {
@@ -197,7 +120,12 @@ func appendEncode(buf []byte, data any) ([]byte, error) {
 	return buf, nil
 }
 
-func decodeSimpleString(bufLen int, buf []byte) (SimpleString, error) {
+// DecodeSimpleString parses a RESP simple string frame ('+' prefix) from buf and
+// returns the payload as a SimpleString. Returns an error if the prefix is wrong,
+// the frame is too short, the CRLF terminator is missing, or the payload contains
+// CR or LF.
+func DecodeSimpleString(buf []byte) (SimpleString, error) {
+	bufLen := len(buf)
 	if bufLen < 3 {
 		return "", fmt.Errorf("buffer too short for SimpleString: need at least 3 bytes, got %d", bufLen)
 	}
@@ -215,7 +143,12 @@ func decodeSimpleString(bufLen int, buf []byte) (SimpleString, error) {
 	return SimpleString(payload), nil
 }
 
-func decodeErrorString(bufLen int, buf []byte) (string, error) {
+// DecodeErrorString parses a RESP error frame ('-' prefix) from buf and returns
+// the error message text as a plain string. Wrap the result with errors.New if
+// you need an error value. Returns an error if the prefix is wrong, the frame is
+// too short, the CRLF terminator is missing, or the payload contains CR or LF.
+func DecodeErrorString(buf []byte) (string, error) {
+	bufLen := len(buf)
 	if bufLen < 3 {
 		return "", fmt.Errorf("buffer too short for error: need at least 3 bytes, got %d", bufLen)
 	}
@@ -233,7 +166,12 @@ func decodeErrorString(bufLen int, buf []byte) (string, error) {
 	return string(payload), nil
 }
 
-func decodeInteger(bufLen int, buf []byte) (int, error) {
+// DecodeInteger parses a RESP integer frame (':' prefix) from buf and returns the
+// value as an int. Handles negative values. Returns an error if the prefix is
+// wrong, the frame is too short, the CRLF terminator is missing, or the payload
+// contains non-digit characters.
+func DecodeInteger(buf []byte) (int, error) {
+	bufLen := len(buf)
 	if bufLen < 4 {
 		return 0, fmt.Errorf("buffer too short for int: need at least 4 bytes, got %d", bufLen)
 	}
@@ -249,9 +187,6 @@ func decodeInteger(bufLen int, buf []byte) (int, error) {
 	num := 0
 	payload := buf[1 : bufLen-2]
 
-	if len(payload) == 0 {
-		return 0, fmt.Errorf("integer has no digit characters")
-	}
 	if payload[0] == '-' {
 		isNeg = -1
 		payload = payload[1:]
@@ -269,7 +204,12 @@ func decodeInteger(bufLen int, buf []byte) (int, error) {
 	return isNeg * num, nil
 }
 
-func decodeBulkString(bufLen int, buf []byte) (string, error) {
+// DecodeBulkString parses a RESP bulk string frame ('$' prefix) from buf and
+// returns the payload as a string. Returns an error if the prefix is wrong, the
+// frame is too short, the CRLF terminator is missing, or the declared length does
+// not match the actual payload.
+func DecodeBulkString(buf []byte) (string, error) {
+	bufLen := len(buf)
 	if bufLen < 5 {
 		return "", fmt.Errorf("buffer too short for bulk string: need at least 5 bytes, got %d", bufLen)
 	}
@@ -298,7 +238,10 @@ func decodeBulkString(bufLen int, buf []byte) (string, error) {
 	return string(payload), nil
 }
 
-func decodeNullBulkString(bufLen int, buf []byte) error {
+// DecodeNullBulkString validates that buf is exactly the null bulk string frame
+// ("$-1\r\n"). Returns an error if the length or contents do not match.
+func DecodeNullBulkString(buf []byte) error {
+	bufLen := len(buf)
 	if bufLen != 5 {
 		return fmt.Errorf("invalid null bulk string: expected exactly 5 bytes, got %d", bufLen)
 	}
@@ -308,7 +251,12 @@ func decodeNullBulkString(bufLen int, buf []byte) error {
 	return nil
 }
 
-func decodeArray(bufLen int, buf []byte) ([]any, error) {
+// DecodeArray parses a RESP array frame ('*' prefix) from buf and returns its
+// elements as []any. Elements are decoded recursively and may be of mixed types;
+// null elements ($-1\r\n, *-1\r\n) are decoded as nil. Returns an error if the
+// prefix is wrong, the count is invalid, or any element fails to decode.
+func DecodeArray(buf []byte) ([]any, error) {
+	bufLen := len(buf)
 	if bufLen < 4 {
 		return []any{}, fmt.Errorf("buffer too short for array: need at least 5 bytes, got %d", bufLen)
 	}
@@ -324,7 +272,7 @@ func decodeArray(bufLen int, buf []byte) ([]any, error) {
 		return []any{}, nil
 	}
 
-	array := []any{}
+	array := make([]any, 0, size)
 	payload := buf[digits+3:]
 	pos := 0
 	maxIdx := bufLen - digits - 3
@@ -374,36 +322,35 @@ func decodeArray(bufLen int, buf []byte) ([]any, error) {
 		}
 
 		itemBytes := payload[fIdx:lastIndex]
-		itemBytesLen := len(itemBytes)
 
 		switch itemBytes[0] {
 		case '+':
-			s, err := decodeSimpleString(itemBytesLen, itemBytes)
+			s, err := DecodeSimpleString(itemBytes)
 			if err != nil {
 				return []any{}, err
 			}
 			array = append(array, s)
 		case '-':
-			errString, err := decodeErrorString(itemBytesLen, itemBytes)
+			errString, err := DecodeErrorString(itemBytes)
 			if err != nil {
 				return []any{}, err
 			}
 			array = append(array, errors.New(errString))
 		case ':':
-			integer, err := decodeInteger(itemBytesLen, itemBytes)
+			integer, err := DecodeInteger(itemBytes)
 			if err != nil {
 				return []any{}, err
 			}
 			array = append(array, integer)
 		case '$':
 			if itemBytes[1] == '-' {
-				err := decodeNullBulkString(itemBytesLen, itemBytes)
+				err := DecodeNullBulkString(itemBytes)
 				if err != nil {
 					return []any{}, err
 				}
 				array = append(array, nil)
 			} else {
-				bulkString, err := decodeBulkString(itemBytesLen, itemBytes)
+				bulkString, err := DecodeBulkString(itemBytes)
 				if err != nil {
 					return []any{}, err
 				}
@@ -411,13 +358,13 @@ func decodeArray(bufLen int, buf []byte) ([]any, error) {
 			}
 		case '*':
 			if itemBytes[1] == '-' {
-				err := decodeNullArray(itemBytesLen, itemBytes)
+				err := DecodeNullArray(itemBytes)
 				if err != nil {
 					return []any{}, err
 				}
 				array = append(array, nil)
 			} else {
-				arr, err := decodeArray(itemBytesLen, itemBytes)
+				arr, err := DecodeArray(itemBytes)
 				if err != nil {
 					return []any{}, err
 				}
@@ -434,7 +381,10 @@ func decodeArray(bufLen int, buf []byte) ([]any, error) {
 	return array, nil
 }
 
-func decodeNullArray(bufLen int, buf []byte) error {
+// DecodeNullArray validates that buf is exactly the null array frame ("*-1\r\n").
+// Returns an error if the length or contents do not match.
+func DecodeNullArray(buf []byte) error {
+	bufLen := len(buf)
 	if bufLen != 5 {
 		return fmt.Errorf("invalid null array: expected exactly 5 bytes, got %d", bufLen)
 	}
