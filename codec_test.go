@@ -853,6 +853,348 @@ func TestDecode(t *testing.T) {
 	})
 }
 
+func TestRoundTrip(t *testing.T) {
+	t.Run("simple string - ok", func(t *testing.T) {
+		input := SimpleString("OK")
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeSimpleString(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %q, got %q", input, got)
+		}
+	})
+
+	t.Run("simple string - empty", func(t *testing.T) {
+		input := SimpleString("")
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeSimpleString(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %q, got %q", input, got)
+		}
+	})
+
+	t.Run("simple string - multi word", func(t *testing.T) {
+		input := SimpleString("hello world")
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeSimpleString(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %q, got %q", input, got)
+		}
+	})
+
+	t.Run("error - basic", func(t *testing.T) {
+		input := errors.New("ERR unknown command")
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeErrorString(buf)
+		assertNoError(t, err)
+		if got != input.Error() {
+			t.Errorf("expected %q, got %q", input.Error(), got)
+		}
+	})
+
+	t.Run("error - empty", func(t *testing.T) {
+		input := errors.New("")
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeErrorString(buf)
+		assertNoError(t, err)
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("error - WRONGTYPE prefix", func(t *testing.T) {
+		input := errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeErrorString(buf)
+		assertNoError(t, err)
+		if got != input.Error() {
+			t.Errorf("expected %q, got %q", input.Error(), got)
+		}
+	})
+
+	t.Run("integer - positive", func(t *testing.T) {
+		input := 42
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeInteger(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %d, got %d", input, got)
+		}
+	})
+
+	t.Run("integer - zero", func(t *testing.T) {
+		input := 0
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeInteger(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %d, got %d", input, got)
+		}
+	})
+
+	t.Run("integer - negative", func(t *testing.T) {
+		input := -1
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeInteger(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %d, got %d", input, got)
+		}
+	})
+
+	t.Run("integer - max", func(t *testing.T) {
+		input := math.MaxInt
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeInteger(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %d, got %d", input, got)
+		}
+	})
+
+	t.Run("integer - min", func(t *testing.T) {
+		input := math.MinInt
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeInteger(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %d, got %d", input, got)
+		}
+	})
+
+	t.Run("bulk string - normal", func(t *testing.T) {
+		input := "hello"
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeBulkString(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %q, got %q", input, got)
+		}
+	})
+
+	t.Run("bulk string - empty", func(t *testing.T) {
+		input := ""
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeBulkString(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("bulk string - with spaces", func(t *testing.T) {
+		input := "hello world"
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeBulkString(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %q, got %q", input, got)
+		}
+	})
+
+	t.Run("bulk string - binary safe with CRLF", func(t *testing.T) {
+		input := "hello\r\nworld"
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeBulkString(buf)
+		assertNoError(t, err)
+		if got != input {
+			t.Errorf("expected %q, got %q", input, got)
+		}
+	})
+
+	t.Run("null bulk string", func(t *testing.T) {
+		buf, err := Encode(Null)
+		assertNoError(t, err)
+		err = DecodeNullBulkString(buf)
+		assertNoError(t, err)
+	})
+
+	t.Run("null array", func(t *testing.T) {
+		buf, err := Encode(NullArr)
+		assertNoError(t, err)
+		err = DecodeNullArray(buf)
+		assertNoError(t, err)
+	})
+
+	t.Run("array - empty", func(t *testing.T) {
+		input := []any{}
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeArray(buf)
+		assertNoError(t, err)
+		if len(got) != 0 {
+			t.Errorf("expected empty slice, got %v", got)
+		}
+	})
+
+	t.Run("array - integers", func(t *testing.T) {
+		input := []any{1, 2, 3}
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeArray(buf)
+		assertNoError(t, err)
+		if len(got) != 3 {
+			t.Fatalf("expected 3 elements, got %d", len(got))
+		}
+		if got[0] != 1 || got[1] != 2 || got[2] != 3 {
+			t.Errorf("expected %v, got %v", input, got)
+		}
+	})
+
+	t.Run("array - bulk strings", func(t *testing.T) {
+		input := []any{"GET", "key"}
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeArray(buf)
+		assertNoError(t, err)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 elements, got %d", len(got))
+		}
+		if got[0] != "GET" || got[1] != "key" {
+			t.Errorf("expected %v, got %v", input, got)
+		}
+	})
+
+	t.Run("array - mixed types", func(t *testing.T) {
+		input := []any{SimpleString("OK"), errors.New("ERR"), 42, "hello"}
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeArray(buf)
+		assertNoError(t, err)
+		if len(got) != 4 {
+			t.Fatalf("expected 4 elements, got %d", len(got))
+		}
+		if got[0] != SimpleString("OK") {
+			t.Errorf("element 0: expected SimpleString(\"OK\"), got %v", got[0])
+		}
+		if got[1].(error).Error() != "ERR" {
+			t.Errorf("element 1: expected error \"ERR\", got %v", got[1])
+		}
+		if got[2] != 42 {
+			t.Errorf("element 2: expected 42, got %v", got[2])
+		}
+		if got[3] != "hello" {
+			t.Errorf("element 3: expected \"hello\", got %v", got[3])
+		}
+	})
+
+	t.Run("array - null bulk string element", func(t *testing.T) {
+		input := []any{"foo", Null, "bar"}
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeArray(buf)
+		assertNoError(t, err)
+		if len(got) != 3 {
+			t.Fatalf("expected 3 elements, got %d", len(got))
+		}
+		if got[0] != "foo" {
+			t.Errorf("element 0: expected \"foo\", got %v", got[0])
+		}
+		if got[1] != nil {
+			t.Errorf("element 1: expected nil, got %v", got[1])
+		}
+		if got[2] != "bar" {
+			t.Errorf("element 2: expected \"bar\", got %v", got[2])
+		}
+	})
+
+	t.Run("array - null array element", func(t *testing.T) {
+		input := []any{NullArr, "foo"}
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeArray(buf)
+		assertNoError(t, err)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 elements, got %d", len(got))
+		}
+		if got[0] != nil {
+			t.Errorf("element 0: expected nil, got %v", got[0])
+		}
+		if got[1] != "foo" {
+			t.Errorf("element 1: expected \"foo\", got %v", got[1])
+		}
+	})
+
+	t.Run("array - nested", func(t *testing.T) {
+		input := []any{
+			[]any{1, 2, 3},
+			[]any{SimpleString("Foo"), errors.New("Bar")},
+		}
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeArray(buf)
+		assertNoError(t, err)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 elements, got %d", len(got))
+		}
+		inner1, ok := got[0].([]any)
+		if !ok {
+			t.Fatalf("element 0: expected []any, got %T", got[0])
+		}
+		if len(inner1) != 3 || inner1[0] != 1 || inner1[1] != 2 || inner1[2] != 3 {
+			t.Errorf("inner array 0: expected [1 2 3], got %v", inner1)
+		}
+		inner2, ok := got[1].([]any)
+		if !ok {
+			t.Fatalf("element 1: expected []any, got %T", got[1])
+		}
+		if len(inner2) != 2 {
+			t.Fatalf("inner array 1: expected 2 elements, got %d", len(inner2))
+		}
+		if inner2[0] != SimpleString("Foo") {
+			t.Errorf("inner2[0]: expected SimpleString(\"Foo\"), got %v", inner2[0])
+		}
+		if inner2[1].(error).Error() != "Bar" {
+			t.Errorf("inner2[1]: expected error \"Bar\", got %v", inner2[1])
+		}
+	})
+
+	t.Run("array - typical GET command", func(t *testing.T) {
+		input := []any{"GET", "key"}
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeArray(buf)
+		assertNoError(t, err)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 elements, got %d", len(got))
+		}
+		if got[0] != "GET" || got[1] != "key" {
+			t.Errorf("expected [GET key], got %v", got)
+		}
+	})
+
+	t.Run("array - typical SET command", func(t *testing.T) {
+		input := []any{"SET", "key", "value"}
+		buf, err := Encode(input)
+		assertNoError(t, err)
+		got, err := DecodeArray(buf)
+		assertNoError(t, err)
+		if len(got) != 3 {
+			t.Fatalf("expected 3 elements, got %d", len(got))
+		}
+		if got[0] != "SET" || got[1] != "key" || got[2] != "value" {
+			t.Errorf("expected [SET key value], got %v", got)
+		}
+	})
+}
+
 func TestDecodeMalformedFrames(t *testing.T) {
 	t.Run("simple string rejects malformed terminator", func(t *testing.T) {
 		cases := map[string][]byte{
