@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
+
+	"github.com/0xRadioAc7iv/resp-codec/internal/wire"
 )
 
 // Encode serializes a Go value into its RESP byte representation.
@@ -54,35 +55,19 @@ func appendEncode(buf []byte, data any) ([]byte, error) {
 
 	// Used for simple strings (cannot have CR or LF) like "OK", "PONG" etc.
 	case SimpleString:
-		if strings.ContainsAny(string(v), "\r\n") {
-			return buf, fmt.Errorf("simple string must not contain CR or LF characters: %q", string(v))
-		}
-
-		buf = append(buf, '+')
-		buf = append(buf, v...)
+		return wire.AppendSimpleString(buf, string(v))
 
 	// Used for strings (can have CR and LF), Binary Safe
 	case string:
-		buf = append(buf, '$')
-		buf = strconv.AppendInt(buf, int64(len(v)), 10)
-		buf = append(buf, '\r', '\n')
-		buf = append(buf, v...)
+		return wire.AppendBlobString(buf, v), nil
 
 	// Used for sending error messages (cannot have CR or LF characters)
 	case error:
-		msg := v.Error()
-
-		if strings.ContainsAny(msg, "\r\n") {
-			return buf, fmt.Errorf("error message must not contain CR or LF characters: %q", msg)
-		}
-
-		buf = append(buf, '-')
-		buf = append(buf, msg...)
+		return wire.AppendSimpleError(buf, v.Error())
 
 	// Used for numbers
 	case int:
-		buf = append(buf, ':')
-		buf = strconv.AppendInt(buf, int64(v), 10)
+		return wire.AppendInteger(buf, v), nil
 
 	// Used for arrays; elements are encoded recursively and may be of mixed types
 	case []any:
