@@ -12,6 +12,12 @@ var Null = NullValue{}
 // Wire format: !<len>\r\n<data>\r\n.
 type BlobError string
 
+// VerbatimString is a RESP3 verbatim string. It is binary-safe like BlobString
+// but uses the = sigil to signal to clients that the encoding type is embedded in
+// the payload. The caller is responsible for including the encoding prefix
+// (e.g. "txt:hello" or "mkd:**bold**"). Wire format: =<len>\r\n<data>\r\n.
+type VerbatimString string
+
 // InfValue is the backing type for the Inf sentinel.
 // Encodes as ,inf\r\n.
 type InfValue struct{}

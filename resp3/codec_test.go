@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math/big"
 	"testing"
 
 	respcodec "github.com/0xRadioAc7iv/resp-codec"
@@ -19,6 +20,11 @@ func ExampleEncode() {
 	buf, _ = Encode("hello")
 	fmt.Printf("%q\n", buf)
 	buf, _ = Encode(BlobError("ERR multi\r\nline error"))
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(VerbatimString("txt:hello"))
+	fmt.Printf("%q\n", buf)
+	n, _ := new(big.Int).SetString("123456789012345678901234567890", 10)
+	buf, _ = Encode(n)
 	fmt.Printf("%q\n", buf)
 	buf, _ = Encode(3.14)
 	fmt.Printf("%q\n", buf)
@@ -43,6 +49,8 @@ func ExampleEncode() {
 	// ":42\r\n"
 	// "$5\r\nhello\r\n"
 	// "!21\r\nERR multi\r\nline error\r\n"
+	// "=9\r\ntxt:hello\r\n"
+	// "(123456789012345678901234567890\r\n"
 	// ",3.14\r\n"
 	// ",inf\r\n"
 	// ",-inf\r\n"
@@ -60,6 +68,9 @@ func ExampleAppendEncode() {
 	buf, _ = AppendEncode(buf, 42)
 	buf, _ = AppendEncode(buf, "hello")
 	buf, _ = AppendEncode(buf, BlobError("ERR oops"))
+	buf, _ = AppendEncode(buf, VerbatimString("txt:hello"))
+	n, _ := new(big.Int).SetString("9999999999999999999", 10)
+	buf, _ = AppendEncode(buf, n)
 	buf, _ = AppendEncode(buf, 3.14)
 	buf, _ = AppendEncode(buf, Inf)
 	buf, _ = AppendEncode(buf, NegInf)
@@ -69,7 +80,7 @@ func ExampleAppendEncode() {
 	fmt.Printf("%q\n", buf)
 
 	// Output:
-	// "+OK\r\n-ERR unknown command\r\n:42\r\n$5\r\nhello\r\n!8\r\nERR oops\r\n,3.14\r\n,inf\r\n,-inf\r\n,nan\r\n_\r\n#t\r\n"
+	// "+OK\r\n-ERR unknown command\r\n:42\r\n$5\r\nhello\r\n!8\r\nERR oops\r\n=9\r\ntxt:hello\r\n(9999999999999999999\r\n,3.14\r\n,inf\r\n,-inf\r\n,nan\r\n_\r\n#t\r\n"
 }
 
 func TestEncode(t *testing.T) {
@@ -121,6 +132,38 @@ func TestEncode(t *testing.T) {
 		got, err := Encode(BlobError("ERR multi\r\nline"))
 		assertNoError(t, err)
 		assertBytes(t, got, []byte("!15\r\nERR multi\r\nline\r\n"))
+	})
+
+	t.Run("verbatim string - dispatches correctly", func(t *testing.T) {
+		got, err := Encode(VerbatimString("txt:hello"))
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("=9\r\ntxt:hello\r\n"))
+	})
+
+	t.Run("verbatim string - binary safe", func(t *testing.T) {
+		got, err := Encode(VerbatimString("txt:line1\r\nline2"))
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("=16\r\ntxt:line1\r\nline2\r\n"))
+	})
+
+	t.Run("big number - positive", func(t *testing.T) {
+		n, _ := new(big.Int).SetString("123456789012345678901234567890", 10)
+		got, err := Encode(n)
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("(123456789012345678901234567890\r\n"))
+	})
+
+	t.Run("big number - negative", func(t *testing.T) {
+		n, _ := new(big.Int).SetString("-123456789012345678901234567890", 10)
+		got, err := Encode(n)
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("(-123456789012345678901234567890\r\n"))
+	})
+
+	t.Run("big number - zero", func(t *testing.T) {
+		got, err := Encode(new(big.Int))
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("(0\r\n"))
 	})
 
 	t.Run("double float64 - positive", func(t *testing.T) {
@@ -221,6 +264,8 @@ func BenchmarkEncode(b *testing.B) {
 		name  string
 		input any
 	}{
+		{"verbatim string", VerbatimString("txt:hello world")},
+		{"big number", func() *big.Int { n, _ := new(big.Int).SetString("123456789012345678901234567890", 10); return n }()},
 		{"null", Null},
 		{"boolean true", true},
 		{"boolean false", false},

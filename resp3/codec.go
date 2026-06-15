@@ -2,6 +2,7 @@ package resp3
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 
 	respcodec "github.com/0xRadioAc7iv/resp-codec"
@@ -29,6 +30,10 @@ func appendEncode(buf []byte, data any) ([]byte, error) {
 	case respcodec.SimpleString:
 		return wire.AppendSimpleString(buf, string(v))
 
+	// Verbatim String - same as Blog String
+	case VerbatimString:
+		return wire.AppendVerbatimString(buf, string(v)), nil
+
 	// Blob string (RESP3 name for bulk string) — binary safe
 	case string:
 		return wire.AppendBlobString(buf, v), nil
@@ -44,6 +49,13 @@ func appendEncode(buf []byte, data any) ([]byte, error) {
 	// Integer
 	case int:
 		return wire.AppendInteger(buf, v), nil
+
+	// Big number — arbitrary-precision integer. Format: (<decimal>\r\n.
+	case *big.Int:
+		buf = append(buf, '(')
+		buf = append(buf, v.String()...)
+		buf = append(buf, '\r', '\n')
+		return buf, nil
 
 	// Double — float32 is promoted to float64 before encoding. Format: ,<value>\r\n.
 	case float32, float64:

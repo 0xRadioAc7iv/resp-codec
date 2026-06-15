@@ -12,6 +12,13 @@ func AppendBlobString(buf []byte, s string) []byte {
 	return appendBlobData(buf, s, '$')
 }
 
+// AppendVerbatimString appends the RESP3 verbatim string encoding of s into buf
+// and returns the extended slice. Format: =<len>\r\n<data>\r\n.
+// The caller is responsible for the encoding prefix (e.g. "txt:" or "mkd:") in s.
+func AppendVerbatimString(buf []byte, s string) []byte {
+	return appendBlobData(buf, s, '=')
+}
+
 // AppendBlobError appends the RESP3 blob error encoding of s into buf
 // and returns the extended slice. Format: !<len>\r\n<data>\r\n.
 func AppendBlobError(buf []byte, s string) []byte {
@@ -54,7 +61,7 @@ func AppendSimpleError(buf []byte, msg string) ([]byte, error) {
 }
 
 // appendBlobData writes a length-prefixed RESP frame into buf using firstByte as the sigil.
-// Format: <sigil><len>\r\n<data>\r\n. Used by AppendBlobString ($) and AppendBlobError (!).
+// Format: <sigil><len>\r\n<data>\r\n. Used by AppendBlobString ($), AppendBlobError (!), and AppendVerbatimString (=).
 func appendBlobData(buf []byte, s string, firstByte byte) []byte {
 	buf = append(buf, firstByte)
 	buf = strconv.AppendInt(buf, int64(len(s)), 10)

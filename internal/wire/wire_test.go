@@ -300,3 +300,56 @@ func TestAppendBlobErrorAppendsToExisting(t *testing.T) {
 		t.Errorf("expected %q, got %q", want, got)
 	}
 }
+
+// ---- AppendVerbatimString ----
+
+func ExampleAppendVerbatimString() {
+	buf := AppendVerbatimString(nil, "txt:hello")
+	fmt.Printf("%q\n", buf)
+	buf = AppendVerbatimString(nil, "mkd:**bold**")
+	fmt.Printf("%q\n", buf)
+	buf = AppendVerbatimString(nil, "")
+	fmt.Printf("%q\n", buf)
+
+	// Output:
+	// "=9\r\ntxt:hello\r\n"
+	// "=12\r\nmkd:**bold**\r\n"
+	// "=0\r\n\r\n"
+}
+
+func BenchmarkAppendVerbatimString(b *testing.B) {
+	for b.Loop() {
+		_ = AppendVerbatimString(nil, "txt:hello world")
+	}
+}
+
+func TestAppendVerbatimString(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  []byte
+	}{
+		{"text encoding", "txt:hello", []byte("=9\r\ntxt:hello\r\n")},
+		{"markdown encoding", "mkd:**bold**", []byte("=12\r\nmkd:**bold**\r\n")},
+		{"empty", "", []byte("=0\r\n\r\n")},
+		{"binary safe with CRLF", "txt:line1\r\nline2", []byte("=16\r\ntxt:line1\r\nline2\r\n")},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := AppendVerbatimString(nil, c.input)
+			if !bytes.Equal(got, c.want) {
+				t.Errorf("expected %q, got %q", c.want, got)
+			}
+		})
+	}
+}
+
+func TestAppendVerbatimStringAppendsToExisting(t *testing.T) {
+	buf := []byte(":42\r\n")
+	got := AppendVerbatimString(buf, "txt:hello")
+	want := []byte(":42\r\n=9\r\ntxt:hello\r\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}
