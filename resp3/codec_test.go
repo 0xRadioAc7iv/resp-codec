@@ -18,7 +18,23 @@ func ExampleEncode() {
 	fmt.Printf("%q\n", buf)
 	buf, _ = Encode("hello")
 	fmt.Printf("%q\n", buf)
-	buf, err := Encode(3.14)
+	buf, _ = Encode(BlobError("ERR multi\r\nline error"))
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(3.14)
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(Inf)
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(NegInf)
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(NaN)
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(Null)
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(true)
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(false)
+	fmt.Printf("%q\n", buf)
+	buf, err := Encode(uint(42))
 	fmt.Printf("%v %v\n", buf, err)
 
 	// Output:
@@ -26,7 +42,15 @@ func ExampleEncode() {
 	// "-ERR unknown command\r\n"
 	// ":42\r\n"
 	// "$5\r\nhello\r\n"
-	// [] unsupported type float64: cannot encode to RESP3
+	// "!21\r\nERR multi\r\nline error\r\n"
+	// ",3.14\r\n"
+	// ",inf\r\n"
+	// ",-inf\r\n"
+	// ",nan\r\n"
+	// "_\r\n"
+	// "#t\r\n"
+	// "#f\r\n"
+	// [] unsupported type uint: cannot encode to RESP3
 }
 
 func ExampleAppendEncode() {
@@ -35,10 +59,17 @@ func ExampleAppendEncode() {
 	buf, _ = AppendEncode(buf, errors.New("ERR unknown command"))
 	buf, _ = AppendEncode(buf, 42)
 	buf, _ = AppendEncode(buf, "hello")
+	buf, _ = AppendEncode(buf, BlobError("ERR oops"))
+	buf, _ = AppendEncode(buf, 3.14)
+	buf, _ = AppendEncode(buf, Inf)
+	buf, _ = AppendEncode(buf, NegInf)
+	buf, _ = AppendEncode(buf, NaN)
+	buf, _ = AppendEncode(buf, Null)
+	buf, _ = AppendEncode(buf, true)
 	fmt.Printf("%q\n", buf)
 
 	// Output:
-	// "+OK\r\n-ERR unknown command\r\n:42\r\n$5\r\nhello\r\n"
+	// "+OK\r\n-ERR unknown command\r\n:42\r\n$5\r\nhello\r\n!8\r\nERR oops\r\n,3.14\r\n,inf\r\n,-inf\r\n,nan\r\n_\r\n#t\r\n"
 }
 
 func TestEncode(t *testing.T) {
@@ -80,8 +111,80 @@ func TestEncode(t *testing.T) {
 		assertBytes(t, got, []byte(":42\r\n"))
 	})
 
-	t.Run("unsupported type returns nil and error", func(t *testing.T) {
+	t.Run("blob error - dispatches correctly", func(t *testing.T) {
+		got, err := Encode(BlobError("ERR unknown command"))
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("!19\r\nERR unknown command\r\n"))
+	})
+
+	t.Run("blob error - allows CRLF", func(t *testing.T) {
+		got, err := Encode(BlobError("ERR multi\r\nline"))
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("!15\r\nERR multi\r\nline\r\n"))
+	})
+
+	t.Run("double float64 - positive", func(t *testing.T) {
 		got, err := Encode(3.14)
+		assertNoError(t, err)
+		assertBytes(t, got, []byte(",3.14\r\n"))
+	})
+
+	t.Run("double float64 - negative", func(t *testing.T) {
+		got, err := Encode(-1.5)
+		assertNoError(t, err)
+		assertBytes(t, got, []byte(",-1.5\r\n"))
+	})
+
+	t.Run("double float64 - zero", func(t *testing.T) {
+		got, err := Encode(float64(0))
+		assertNoError(t, err)
+		assertBytes(t, got, []byte(",0\r\n"))
+	})
+
+	t.Run("double float32 - dispatches correctly", func(t *testing.T) {
+		got, err := Encode(float32(1.5))
+		assertNoError(t, err)
+		assertBytes(t, got, []byte(",1.5\r\n"))
+	})
+
+	t.Run("double inf - encodes correctly", func(t *testing.T) {
+		got, err := Encode(Inf)
+		assertNoError(t, err)
+		assertBytes(t, got, []byte(",inf\r\n"))
+	})
+
+	t.Run("double neg inf - encodes correctly", func(t *testing.T) {
+		got, err := Encode(NegInf)
+		assertNoError(t, err)
+		assertBytes(t, got, []byte(",-inf\r\n"))
+	})
+
+	t.Run("double nan - encodes correctly", func(t *testing.T) {
+		got, err := Encode(NaN)
+		assertNoError(t, err)
+		assertBytes(t, got, []byte(",nan\r\n"))
+	})
+
+	t.Run("null - encodes correctly", func(t *testing.T) {
+		got, err := Encode(Null)
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("_\r\n"))
+	})
+
+	t.Run("boolean - true", func(t *testing.T) {
+		got, err := Encode(true)
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("#t\r\n"))
+	})
+
+	t.Run("boolean - false", func(t *testing.T) {
+		got, err := Encode(false)
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("#f\r\n"))
+	})
+
+	t.Run("unsupported type returns nil and error", func(t *testing.T) {
+		got, err := Encode(uint(42))
 		if got != nil {
 			t.Errorf("expected nil bytes, got %q", got)
 		}
@@ -106,11 +209,35 @@ func TestAppendEncode(t *testing.T) {
 	})
 
 	t.Run("unsupported type returns error", func(t *testing.T) {
-		_, err := AppendEncode(nil, 3.14)
+		_, err := AppendEncode(nil, uint(42))
 		if err == nil {
 			t.Error("expected error for unsupported type, got nil")
 		}
 	})
+}
+
+func BenchmarkEncode(b *testing.B) {
+	cases := []struct {
+		name  string
+		input any
+	}{
+		{"null", Null},
+		{"boolean true", true},
+		{"boolean false", false},
+		{"double float64", 3.14},
+		{"double float32", float32(1.5)},
+		{"double inf", Inf},
+		{"double neg inf", NegInf},
+		{"double nan", NaN},
+	}
+
+	for _, c := range cases {
+		b.Run(c.name, func(b *testing.B) {
+			for b.Loop() {
+				_, _ = Encode(c.input)
+			}
+		})
+	}
 }
 
 func assertNoError(t testing.TB, err error) {

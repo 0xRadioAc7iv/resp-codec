@@ -247,3 +247,56 @@ func TestAppendBlobStringAppendsToExisting(t *testing.T) {
 		t.Errorf("expected %q, got %q", want, got)
 	}
 }
+
+// ---- AppendBlobError ----
+
+func ExampleAppendBlobError() {
+	buf := AppendBlobError(nil, "ERR unknown command")
+	fmt.Printf("%q\n", buf)
+	buf = AppendBlobError(nil, "")
+	fmt.Printf("%q\n", buf)
+	buf = AppendBlobError(nil, "ERR multi\r\nline error")
+	fmt.Printf("%q\n", buf)
+
+	// Output:
+	// "!19\r\nERR unknown command\r\n"
+	// "!0\r\n\r\n"
+	// "!21\r\nERR multi\r\nline error\r\n"
+}
+
+func BenchmarkAppendBlobError(b *testing.B) {
+	for b.Loop() {
+		_ = AppendBlobError(nil, "ERR unknown command")
+	}
+}
+
+func TestAppendBlobError(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  []byte
+	}{
+		{"basic", "ERR unknown command", []byte("!19\r\nERR unknown command\r\n")},
+		{"empty", "", []byte("!0\r\n\r\n")},
+		{"binary safe with CR", "ERR bad\rvalue", []byte("!13\r\nERR bad\rvalue\r\n")},
+		{"binary safe with CRLF", "ERR multi\r\nline", []byte("!15\r\nERR multi\r\nline\r\n")},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := AppendBlobError(nil, c.input)
+			if !bytes.Equal(got, c.want) {
+				t.Errorf("expected %q, got %q", c.want, got)
+			}
+		})
+	}
+}
+
+func TestAppendBlobErrorAppendsToExisting(t *testing.T) {
+	buf := []byte(":42\r\n")
+	got := AppendBlobError(buf, "ERR oops")
+	want := []byte(":42\r\n!8\r\nERR oops\r\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}

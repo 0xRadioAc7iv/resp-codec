@@ -9,12 +9,13 @@ import (
 // AppendBlobString appends the RESP bulk/blob string encoding of s into buf
 // and returns the extended slice. Format: $<len>\r\n<data>\r\n.
 func AppendBlobString(buf []byte, s string) []byte {
-	buf = append(buf, '$')
-	buf = strconv.AppendInt(buf, int64(len(s)), 10)
-	buf = append(buf, '\r', '\n')
-	buf = append(buf, s...)
-	buf = append(buf, '\r', '\n')
-	return buf
+	return appendBlobData(buf, s, '$')
+}
+
+// AppendBlobError appends the RESP3 blob error encoding of s into buf
+// and returns the extended slice. Format: !<len>\r\n<data>\r\n.
+func AppendBlobError(buf []byte, s string) []byte {
+	return appendBlobData(buf, s, '!')
 }
 
 // AppendInteger appends the RESP integer encoding of n into buf
@@ -50,4 +51,15 @@ func AppendSimpleError(buf []byte, msg string) ([]byte, error) {
 	buf = append(buf, msg...)
 	buf = append(buf, '\r', '\n')
 	return buf, nil
+}
+
+// appendBlobData writes a length-prefixed RESP frame into buf using firstByte as the sigil.
+// Format: <sigil><len>\r\n<data>\r\n. Used by AppendBlobString ($) and AppendBlobError (!).
+func appendBlobData(buf []byte, s string, firstByte byte) []byte {
+	buf = append(buf, firstByte)
+	buf = strconv.AppendInt(buf, int64(len(s)), 10)
+	buf = append(buf, '\r', '\n')
+	buf = append(buf, s...)
+	buf = append(buf, '\r', '\n')
+	return buf
 }
