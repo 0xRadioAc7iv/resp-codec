@@ -40,6 +40,14 @@ func ExampleEncode() {
 	fmt.Printf("%q\n", buf)
 	buf, _ = Encode(false)
 	fmt.Printf("%q\n", buf)
+	buf, _ = Encode([]any{42, "hello"})
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(map[respcodec.SimpleString]any{respcodec.SimpleString("key"): 42})
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(map[any]struct{}{42: {}})
+	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(AttributeType{respcodec.SimpleString("ttl"): 100})
+	fmt.Printf("%q\n", buf)
 	buf, err := Encode(uint(42))
 	fmt.Printf("%v %v\n", buf, err)
 
@@ -58,6 +66,10 @@ func ExampleEncode() {
 	// "_\r\n"
 	// "#t\r\n"
 	// "#f\r\n"
+	// "*2\r\n:42\r\n$5\r\nhello\r\n"
+	// "%1\r\n+key\r\n:42\r\n"
+	// "~1\r\n:42\r\n"
+	// "|1\r\n+ttl\r\n:100\r\n"
 	// [] unsupported type uint: cannot encode to RESP3
 }
 
@@ -77,10 +89,11 @@ func ExampleAppendEncode() {
 	buf, _ = AppendEncode(buf, NaN)
 	buf, _ = AppendEncode(buf, Null)
 	buf, _ = AppendEncode(buf, true)
+	buf, _ = AppendEncode(buf, []any{1, "x"})
 	fmt.Printf("%q\n", buf)
 
 	// Output:
-	// "+OK\r\n-ERR unknown command\r\n:42\r\n$5\r\nhello\r\n!8\r\nERR oops\r\n=9\r\ntxt:hello\r\n(9999999999999999999\r\n,3.14\r\n,inf\r\n,-inf\r\n,nan\r\n_\r\n#t\r\n"
+	// "+OK\r\n-ERR unknown command\r\n:42\r\n$5\r\nhello\r\n!8\r\nERR oops\r\n=9\r\ntxt:hello\r\n(9999999999999999999\r\n,3.14\r\n,inf\r\n,-inf\r\n,nan\r\n_\r\n#t\r\n*2\r\n:1\r\n$1\r\nx\r\n"
 }
 
 func TestEncode(t *testing.T) {
@@ -226,6 +239,158 @@ func TestEncode(t *testing.T) {
 		assertBytes(t, got, []byte("#f\r\n"))
 	})
 
+	t.Run("array - empty", func(t *testing.T) {
+		got, err := Encode([]any{})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("*0\r\n"))
+	})
+
+	t.Run("array - single element", func(t *testing.T) {
+		got, err := Encode([]any{42})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("*1\r\n:42\r\n"))
+	})
+
+	t.Run("array - mixed types", func(t *testing.T) {
+		got, err := Encode([]any{1, "hello", true})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("*3\r\n:1\r\n$5\r\nhello\r\n#t\r\n"))
+	})
+
+	t.Run("array - nested", func(t *testing.T) {
+		got, err := Encode([]any{[]any{1, 2}})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("*1\r\n*2\r\n:1\r\n:2\r\n"))
+	})
+
+	t.Run("array - unsupported element rolls back", func(t *testing.T) {
+		prefix := []byte("+OK\r\n")
+		buf := make([]byte, len(prefix), 64)
+		copy(buf, prefix)
+		result, err := AppendEncode(buf, []any{42, uint(1)})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		assertBytes(t, result, prefix)
+	})
+
+	t.Run("map - empty", func(t *testing.T) {
+		got, err := Encode(map[respcodec.SimpleString]any{})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("%0\r\n"))
+	})
+
+	t.Run("map - single key", func(t *testing.T) {
+		got, err := Encode(map[respcodec.SimpleString]any{respcodec.SimpleString("key"): 42})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("%1\r\n+key\r\n:42\r\n"))
+	})
+
+	t.Run("map - multiple keys contain all pairs", func(t *testing.T) {
+		got, err := Encode(map[respcodec.SimpleString]any{
+			respcodec.SimpleString("a"): 1,
+			respcodec.SimpleString("b"): 2,
+		})
+		assertNoError(t, err)
+		if !bytes.HasPrefix(got, []byte("%2\r\n")) {
+			t.Errorf("expected %%2\\r\\n header, got %q", got[:min(len(got), 8)])
+		}
+		if !bytes.Contains(got, []byte("+a\r\n:1\r\n")) {
+			t.Errorf("missing pair a→1 in %q", got)
+		}
+		if !bytes.Contains(got, []byte("+b\r\n:2\r\n")) {
+			t.Errorf("missing pair b→2 in %q", got)
+		}
+	})
+
+	t.Run("map - unsupported value rolls back", func(t *testing.T) {
+		prefix := []byte("+OK\r\n")
+		buf := make([]byte, len(prefix), 64)
+		copy(buf, prefix)
+		result, err := AppendEncode(buf, map[respcodec.SimpleString]any{respcodec.SimpleString("k"): uint(1)})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		assertBytes(t, result, prefix)
+	})
+
+	t.Run("set - empty", func(t *testing.T) {
+		got, err := Encode(map[any]struct{}{})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("~0\r\n"))
+	})
+
+	t.Run("set - single element", func(t *testing.T) {
+		got, err := Encode(map[any]struct{}{42: {}})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("~1\r\n:42\r\n"))
+	})
+
+	t.Run("set - multiple elements contain all members", func(t *testing.T) {
+		got, err := Encode(map[any]struct{}{1: {}, 2: {}})
+		assertNoError(t, err)
+		if !bytes.HasPrefix(got, []byte("~2\r\n")) {
+			t.Errorf("expected ~2\\r\\n header, got %q", got[:min(len(got), 8)])
+		}
+		if !bytes.Contains(got, []byte(":1\r\n")) {
+			t.Errorf("missing element 1 in %q", got)
+		}
+		if !bytes.Contains(got, []byte(":2\r\n")) {
+			t.Errorf("missing element 2 in %q", got)
+		}
+	})
+
+	t.Run("set - unsupported element rolls back", func(t *testing.T) {
+		prefix := []byte("+OK\r\n")
+		buf := make([]byte, len(prefix), 64)
+		copy(buf, prefix)
+		result, err := AppendEncode(buf, map[any]struct{}{uint(1): {}})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		assertBytes(t, result, prefix)
+	})
+
+	t.Run("attribute - empty", func(t *testing.T) {
+		got, err := Encode(AttributeType{})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("|0\r\n"))
+	})
+
+	t.Run("attribute - single key", func(t *testing.T) {
+		got, err := Encode(AttributeType{respcodec.SimpleString("ttl"): 100})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte("|1\r\n+ttl\r\n:100\r\n"))
+	})
+
+	t.Run("attribute - multiple keys contain all pairs", func(t *testing.T) {
+		got, err := Encode(AttributeType{
+			respcodec.SimpleString("ttl"):  100,
+			respcodec.SimpleString("hits"): 42,
+		})
+		assertNoError(t, err)
+		if !bytes.HasPrefix(got, []byte("|2\r\n")) {
+			t.Errorf("expected |2\\r\\n header, got %q", got[:min(len(got), 8)])
+		}
+		if !bytes.Contains(got, []byte("+ttl\r\n:100\r\n")) {
+			t.Errorf("missing pair ttl→100 in %q", got)
+		}
+		if !bytes.Contains(got, []byte("+hits\r\n:42\r\n")) {
+			t.Errorf("missing pair hits→42 in %q", got)
+		}
+	})
+
+	t.Run("attribute - unsupported value rolls back", func(t *testing.T) {
+		prefix := []byte("+OK\r\n")
+		buf := make([]byte, len(prefix), 64)
+		copy(buf, prefix)
+		result, err := AppendEncode(buf, AttributeType{respcodec.SimpleString("k"): uint(1)})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		assertBytes(t, result, prefix)
+	})
+
 	t.Run("unsupported type returns nil and error", func(t *testing.T) {
 		got, err := Encode(uint(42))
 		if got != nil {
@@ -265,6 +430,10 @@ func BenchmarkEncode(b *testing.B) {
 		input any
 	}{
 		{"verbatim string", VerbatimString("txt:hello world")},
+		{"array 3 elements", []any{1, "hello", true}},
+		{"map 1 key", map[respcodec.SimpleString]any{respcodec.SimpleString("key"): 42}},
+		{"set 1 element", map[any]struct{}{42: {}}},
+		{"attribute 1 key", AttributeType{respcodec.SimpleString("ttl"): 100}},
 		{"big number", func() *big.Int { n, _ := new(big.Int).SetString("123456789012345678901234567890", 10); return n }()},
 		{"null", Null},
 		{"boolean true", true},

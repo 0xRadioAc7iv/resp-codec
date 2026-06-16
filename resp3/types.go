@@ -1,5 +1,7 @@
 package resp3
 
+import respcodec "github.com/0xRadioAc7iv/resp-codec"
+
 // NullValue is the backing type for the Null sentinel.
 // RESP3 uses a single unified null (_\r\n) replacing RESP2's $-1\r\n and *-1\r\n.
 type NullValue struct{}
@@ -38,3 +40,8 @@ var NegInf = NegInfValue{}
 
 // NaN encodes a RESP3 double not-a-number (,nan\r\n).
 var NaN = NaNValue{}
+
+// AttributeType is a RESP3 attribute map. It encodes like Map but uses the |
+// sigil, allowing servers to attach out-of-band metadata before the actual reply.
+// Wire format: |<pairs>\r\n<key><value>...<reply>.
+type AttributeType map[respcodec.SimpleString]any

@@ -95,7 +95,78 @@ func appendEncode(buf []byte, data any) ([]byte, error) {
 		buf = append(buf, '\r', '\n')
 		return buf, nil
 
+	// Array — ordered sequence of heterogeneous RESP3 values. Format: *<count>\r\n<elements>...
+	case []any:
+		savedBuf := buf   // preserve reference in case encoding fails
+		start := len(buf) // checkpoint before any array bytes are written
+
+		buf = append(buf, '*')
+		buf = strconv.AppendInt(buf, int64(len(v)), 10)
+		buf = append(buf, '\r', '\n')
+
+		for i, item := range v {
+			var err error
+			buf, err = appendEncode(buf, item)
+			if err != nil {
+				return savedBuf[:start], fmt.Errorf("failed to encode array element at index %d: %w", i, err)
+			}
+		}
+
+		return buf, nil
+
+	// Map — key-value pairs with SimpleString keys. Format: %<pairs>\r\n<key><value>...
+	case map[respcodec.SimpleString]any:
+		return appendMapData(buf, v, '%')
+
+	// Set — unordered collection of unique RESP3 values. Format: ~<count>\r\n<elements>...
+	case map[any]struct{}:
+		savedBuf := buf
+		start := len(buf)
+
+		buf = append(buf, '~')
+		buf = strconv.AppendInt(buf, int64(len(v)), 10)
+		buf = append(buf, '\r', '\n')
+
+		for item := range v {
+			var err error
+			buf, err = appendEncode(buf, item)
+			if err != nil {
+				return savedBuf[:start], fmt.Errorf("failed to encode set item %q: %w", item, err)
+			}
+		}
+
+		return buf, nil
+
+	// Attribute — out-of-band metadata map preceding a reply. Same structure as Map but sigil |.
+	case AttributeType:
+		return appendMapData(buf, map[respcodec.SimpleString]any(v), '|')
+
 	default:
 		return buf, fmt.Errorf("unsupported type %T: cannot encode to RESP3", data)
 	}
+}
+
+// appendMapData encodes a SimpleString-keyed map into buf using sigil as the
+// first byte. Used by Map (%) and Attribute (|).
+func appendMapData(buf []byte, m map[respcodec.SimpleString]any, sigil byte) ([]byte, error) {
+	savedBuf := buf
+	start := len(buf)
+
+	buf = append(buf, sigil)
+	buf = strconv.AppendInt(buf, int64(len(m)), 10)
+	buf = append(buf, '\r', '\n')
+
+	for k, v := range m {
+		var err error
+		buf, err = appendEncode(buf, k)
+		if err != nil {
+			return savedBuf[:start], fmt.Errorf("failed to encode map key %q: %w", k, err)
+		}
+		buf, err = appendEncode(buf, v)
+		if err != nil {
+			return savedBuf[:start], fmt.Errorf("failed to encode map value %q: %w", v, err)
+		}
+	}
+
+	return buf, nil
 }
