@@ -141,6 +141,31 @@ func appendEncode(buf []byte, data any) ([]byte, error) {
 	case AttributeType:
 		return appendMapData(buf, map[respcodec.SimpleString]any(v), '|')
 
+	// Push — server-to-client out-of-band message. Format: ><count>\r\n<kind><args...>.
+	// Kind is always encoded first as a simple string; count includes it.
+	case Push:
+		savedBuf := buf
+		start := len(buf)
+
+		buf = append(buf, '>')
+		buf = strconv.AppendInt(buf, int64(len(v.Args)+1), 10)
+		buf = append(buf, '\r', '\n')
+
+		var err error
+		buf, err = appendEncode(buf, v.Kind)
+		if err != nil {
+			return savedBuf[:start], fmt.Errorf("failed to encode push kind: %w", err)
+		}
+
+		for i, item := range v.Args {
+			buf, err = appendEncode(buf, item)
+			if err != nil {
+				return savedBuf[:start], fmt.Errorf("failed to encode push arg at index %d: %w", i, err)
+			}
+		}
+
+		return buf, nil
+
 	default:
 		return buf, fmt.Errorf("unsupported type %T: cannot encode to RESP3", data)
 	}

@@ -48,6 +48,8 @@ func ExampleEncode() {
 	fmt.Printf("%q\n", buf)
 	buf, _ = Encode(AttributeType{respcodec.SimpleString("ttl"): 100})
 	fmt.Printf("%q\n", buf)
+	buf, _ = Encode(Push{Kind: respcodec.SimpleString("message"), Args: []any{respcodec.SimpleString("ch"), "hello"}})
+	fmt.Printf("%q\n", buf)
 	buf, err := Encode(uint(42))
 	fmt.Printf("%v %v\n", buf, err)
 
@@ -70,6 +72,7 @@ func ExampleEncode() {
 	// "%1\r\n+key\r\n:42\r\n"
 	// "~1\r\n:42\r\n"
 	// "|1\r\n+ttl\r\n:100\r\n"
+	// ">3\r\n+message\r\n+ch\r\n$5\r\nhello\r\n"
 	// [] unsupported type uint: cannot encode to RESP3
 }
 
@@ -391,6 +394,29 @@ func TestEncode(t *testing.T) {
 		assertBytes(t, result, prefix)
 	})
 
+	t.Run("push - no args", func(t *testing.T) {
+		got, err := Encode(Push{Kind: respcodec.SimpleString("subscribe")})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte(">1\r\n+subscribe\r\n"))
+	})
+
+	t.Run("push - with args", func(t *testing.T) {
+		got, err := Encode(Push{Kind: respcodec.SimpleString("message"), Args: []any{respcodec.SimpleString("ch"), "payload"}})
+		assertNoError(t, err)
+		assertBytes(t, got, []byte(">3\r\n+message\r\n+ch\r\n$7\r\npayload\r\n"))
+	})
+
+	t.Run("push - unsupported arg rolls back", func(t *testing.T) {
+		prefix := []byte("+OK\r\n")
+		buf := make([]byte, len(prefix), 64)
+		copy(buf, prefix)
+		result, err := AppendEncode(buf, Push{Kind: respcodec.SimpleString("message"), Args: []any{uint(1)}})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		assertBytes(t, result, prefix)
+	})
+
 	t.Run("unsupported type returns nil and error", func(t *testing.T) {
 		got, err := Encode(uint(42))
 		if got != nil {
@@ -443,6 +469,7 @@ func BenchmarkEncode(b *testing.B) {
 		{"double inf", Inf},
 		{"double neg inf", NegInf},
 		{"double nan", NaN},
+		{"push 2 args", Push{Kind: respcodec.SimpleString("message"), Args: []any{respcodec.SimpleString("ch"), "hello"}}},
 	}
 
 	for _, c := range cases {

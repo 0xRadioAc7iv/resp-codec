@@ -45,3 +45,12 @@ var NaN = NaNValue{}
 // sigil, allowing servers to attach out-of-band metadata before the actual reply.
 // Wire format: |<pairs>\r\n<key><value>...<reply>.
 type AttributeType map[respcodec.SimpleString]any
+
+// Push represents a RESP3 server-initiated out-of-band message sent outside the
+// normal request-response cycle (e.g. Pub/Sub notifications, keyspace events).
+// Kind identifies the push type (e.g. "message", "subscribe"); Args are type-dependent.
+// Wire format: ><count>\r\n<kind><args...>.
+type Push struct {
+	Kind respcodec.SimpleString
+	Args []any
+}
