@@ -1,6 +1,7 @@
 package resp3
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -194,4 +195,93 @@ func appendMapData(buf []byte, m map[respcodec.SimpleString]any, sigil byte) ([]
 	}
 
 	return buf, nil
+}
+
+// Decode parses a single complete RESP3 frame from buf and returns the decoded Go value.
+// The caller must supply exactly one complete frame with no trailing bytes.
+//
+// Implemented type mapping:
+//
+//	+  → respcodec.SimpleString
+//	-  → error
+//	:  → int
+//	$  → string
+//	!  → BlobError
+//	=  → VerbatimString
+//	_  → NullValue
+//	#  → bool
+//
+// Not yet implemented: ( , * % ~ | >
+func Decode(buf []byte) (any, error) {
+	if len(buf) == 0 {
+		return nil, fmt.Errorf("empty buffer")
+	}
+
+	switch buf[0] {
+	case '+':
+		return respcodec.DecodeSimpleString(buf)
+	case '-':
+		s, err := respcodec.DecodeErrorString(buf)
+		if err != nil {
+			return nil, err
+		}
+		return errors.New(s), nil
+	case ':':
+		return respcodec.DecodeInteger(buf)
+	case '$':
+		return respcodec.DecodeBulkString(buf)
+	case '!':
+		s, err := wire.DecodeBlobFrame(buf, '!')
+		if err != nil {
+			return nil, err
+		}
+		return BlobError(s), nil
+	case '=':
+		s, err := wire.DecodeBlobFrame(buf, '=')
+		if err != nil {
+			return nil, err
+		}
+		return VerbatimString(s), nil
+	case '(':
+		// TODO
+		return nil, nil
+	case ',':
+		// TODO
+		return nil, nil
+
+	case '_':
+		if len(buf) != 3 || buf[1] != '\r' || buf[2] != '\n' {
+			return nil, fmt.Errorf("invalid null frame: %q", buf)
+		}
+		return Null, nil
+	case '#':
+		if len(buf) != 4 || buf[2] != '\r' || buf[3] != '\n' {
+			return nil, fmt.Errorf("invalid boolean frame: %q", buf)
+		}
+		switch buf[1] {
+		case 't':
+			return true, nil
+		case 'f':
+			return false, nil
+		default:
+			return nil, fmt.Errorf("invalid boolean value: %q", buf[1])
+		}
+	case '*':
+		// TODO
+		return nil, nil
+	case '%':
+		// TODO
+		return nil, nil
+	case '~':
+		// TODO
+		return nil, nil
+	case '|':
+		// TODO
+		return nil, nil
+	case '>':
+		// TODO
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unknown RESP3 type sigil: %q", buf[0])
+	}
 }

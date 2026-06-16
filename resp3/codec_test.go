@@ -481,6 +481,202 @@ func BenchmarkEncode(b *testing.B) {
 	}
 }
 
+func ExampleDecode() {
+	v, _ := Decode([]byte("+OK\r\n"))
+	fmt.Println(v)
+	v, _ = Decode([]byte("-ERR unknown\r\n"))
+	fmt.Println(v)
+	v, _ = Decode([]byte(":42\r\n"))
+	fmt.Println(v)
+	v, _ = Decode([]byte("$5\r\nhello\r\n"))
+	fmt.Println(v)
+	v, _ = Decode([]byte("!8\r\nERR oops\r\n"))
+	fmt.Println(v)
+	v, _ = Decode([]byte("=9\r\ntxt:hello\r\n"))
+	fmt.Println(v)
+	v, _ = Decode([]byte("_\r\n"))
+	fmt.Println(v == Null)
+	v, _ = Decode([]byte("#t\r\n"))
+	fmt.Println(v)
+	v, _ = Decode([]byte("#f\r\n"))
+	fmt.Println(v)
+	_, err := Decode([]byte("?unknown\r\n"))
+	fmt.Println(err)
+
+	// Output:
+	// OK
+	// ERR unknown
+	// 42
+	// hello
+	// ERR oops
+	// txt:hello
+	// true
+	// true
+	// false
+	// unknown RESP3 type sigil: '?'
+}
+
+func TestDecode(t *testing.T) {
+	t.Run("simple string - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte("+OK\r\n"))
+		assertNoError(t, err)
+		if got != respcodec.SimpleString("OK") {
+			t.Errorf("expected SimpleString(\"OK\"), got %v (%T)", got, got)
+		}
+	})
+
+	t.Run("simple string - CRLF rejected", func(t *testing.T) {
+		_, err := Decode([]byte("+bad\r\ninput\r\n"))
+		if err == nil {
+			t.Error("expected error for CRLF in simple string, got nil")
+		}
+	})
+
+	t.Run("simple error - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte("-ERR unknown\r\n"))
+		assertNoError(t, err)
+		e, ok := got.(error)
+		if !ok {
+			t.Fatalf("expected error type, got %T", got)
+		}
+		if e.Error() != "ERR unknown" {
+			t.Errorf("expected %q, got %q", "ERR unknown", e.Error())
+		}
+	})
+
+	t.Run("simple error - CRLF rejected", func(t *testing.T) {
+		_, err := Decode([]byte("-ERR\r\nbad\r\n"))
+		if err == nil {
+			t.Error("expected error for CRLF in simple error, got nil")
+		}
+	})
+
+	t.Run("integer - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte(":42\r\n"))
+		assertNoError(t, err)
+		if got != 42 {
+			t.Errorf("expected 42, got %v", got)
+		}
+	})
+
+	t.Run("blob string - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte("$5\r\nhello\r\n"))
+		assertNoError(t, err)
+		if got != "hello" {
+			t.Errorf("expected \"hello\", got %v", got)
+		}
+	})
+
+	t.Run("blob error - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte("!19\r\nERR unknown command\r\n"))
+		assertNoError(t, err)
+		if got != BlobError("ERR unknown command") {
+			t.Errorf("expected BlobError(\"ERR unknown command\"), got %v", got)
+		}
+	})
+
+	t.Run("blob error - allows CRLF", func(t *testing.T) {
+		got, err := Decode([]byte("!15\r\nERR multi\r\nline\r\n"))
+		assertNoError(t, err)
+		if got != BlobError("ERR multi\r\nline") {
+			t.Errorf("expected BlobError with embedded CRLF, got %v", got)
+		}
+	})
+
+	t.Run("verbatim string - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte("=9\r\ntxt:hello\r\n"))
+		assertNoError(t, err)
+		if got != VerbatimString("txt:hello") {
+			t.Errorf("expected VerbatimString(\"txt:hello\"), got %v", got)
+		}
+	})
+
+	t.Run("verbatim string - binary safe", func(t *testing.T) {
+		got, err := Decode([]byte("=16\r\ntxt:line1\r\nline2\r\n"))
+		assertNoError(t, err)
+		if got != VerbatimString("txt:line1\r\nline2") {
+			t.Errorf("expected VerbatimString with embedded CRLF, got %v", got)
+		}
+	})
+
+	t.Run("null - decodes correctly", func(t *testing.T) {
+		got, err := Decode([]byte("_\r\n"))
+		assertNoError(t, err)
+		if got != Null {
+			t.Errorf("expected Null, got %v (%T)", got, got)
+		}
+	})
+
+	t.Run("null - invalid frame returns error", func(t *testing.T) {
+		_, err := Decode([]byte("_junk\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid null frame, got nil")
+		}
+	})
+
+	t.Run("boolean - true", func(t *testing.T) {
+		got, err := Decode([]byte("#t\r\n"))
+		assertNoError(t, err)
+		if got != true {
+			t.Errorf("expected true, got %v", got)
+		}
+	})
+
+	t.Run("boolean - false", func(t *testing.T) {
+		got, err := Decode([]byte("#f\r\n"))
+		assertNoError(t, err)
+		if got != false {
+			t.Errorf("expected false, got %v", got)
+		}
+	})
+
+	t.Run("boolean - invalid value returns error", func(t *testing.T) {
+		_, err := Decode([]byte("#x\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid boolean value, got nil")
+		}
+	})
+
+	t.Run("unknown sigil returns error", func(t *testing.T) {
+		_, err := Decode([]byte("?unknown\r\n"))
+		if err == nil {
+			t.Error("expected error for unknown sigil, got nil")
+		}
+	})
+
+	t.Run("empty buffer returns error", func(t *testing.T) {
+		_, err := Decode([]byte{})
+		if err == nil {
+			t.Error("expected error for empty buffer, got nil")
+		}
+	})
+}
+
+func BenchmarkDecode(b *testing.B) {
+	cases := []struct {
+		name  string
+		input []byte
+	}{
+		{"simple string", []byte("+OK\r\n")},
+		{"simple error", []byte("-ERR unknown\r\n")},
+		{"integer", []byte(":42\r\n")},
+		{"blob string", []byte("$5\r\nhello\r\n")},
+		{"blob error", []byte("!8\r\nERR oops\r\n")},
+		{"verbatim string", []byte("=9\r\ntxt:hello\r\n")},
+		{"null", []byte("_\r\n")},
+		{"boolean true", []byte("#t\r\n")},
+		{"boolean false", []byte("#f\r\n")},
+	}
+
+	for _, c := range cases {
+		b.Run(c.name, func(b *testing.B) {
+			for b.Loop() {
+				_, _ = Decode(c.input)
+			}
+		})
+	}
+}
+
 func assertNoError(t testing.TB, err error) {
 	t.Helper()
 	if err != nil {

@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -58,6 +59,56 @@ func AppendSimpleError(buf []byte, msg string) ([]byte, error) {
 	buf = append(buf, msg...)
 	buf = append(buf, '\r', '\n')
 	return buf, nil
+}
+
+// DecodeLineFrame validates and extracts the payload from a line-based frame (+/-).
+// Returns the raw payload bytes without the sigil or \r\n. Returns an error if
+// the sigil is wrong, the CRLF terminator is absent, or the payload contains CR or LF.
+func DecodeLineFrame(buf []byte, sigil byte) ([]byte, error) {
+	n := len(buf)
+	if n < 3 {
+		return nil, fmt.Errorf("line frame too short: need at least 3 bytes, got %d", n)
+	}
+	if buf[0] != sigil {
+		return nil, fmt.Errorf("wrong sigil: expected %q, got %q", sigil, buf[0])
+	}
+	if buf[n-2] != '\r' || buf[n-1] != '\n' {
+		return nil, fmt.Errorf("line frame missing CRLF terminator")
+	}
+	payload := buf[1 : n-2]
+	if bytes.ContainsAny(payload, "\r\n") {
+		return nil, fmt.Errorf("line frame payload must not contain CR or LF")
+	}
+	return payload, nil
+}
+
+// DecodeBlobFrame validates and extracts data from a length-prefixed frame ($, !, =).
+// Returns the data string. Returns an error if the sigil is wrong, the declared
+// length is invalid, or it does not match the actual payload size.
+func DecodeBlobFrame(buf []byte, sigil byte) (string, error) {
+	n := len(buf)
+	if n < 5 {
+		return "", fmt.Errorf("blob frame too short: need at least 5 bytes, got %d", n)
+	}
+	if buf[0] != sigil {
+		return "", fmt.Errorf("wrong sigil: expected %q, got %q", sigil, buf[0])
+	}
+	if buf[n-2] != '\r' || buf[n-1] != '\n' {
+		return "", fmt.Errorf("blob frame missing CRLF terminator")
+	}
+	p := bytes.IndexByte(buf[1:], '\r')
+	if p < 0 {
+		return "", fmt.Errorf("blob frame missing CRLF after length")
+	}
+	length, err := strconv.Atoi(string(buf[1 : p+1]))
+	if err != nil || length < 0 {
+		return "", fmt.Errorf("invalid blob frame length: %q", buf[1:p+1])
+	}
+	dataStart := p + 3
+	if dataStart+length+2 != n {
+		return "", fmt.Errorf("blob frame length mismatch: declared %d, frame has %d data bytes", length, n-dataStart-2)
+	}
+	return string(buf[dataStart : dataStart+length]), nil
 }
 
 // appendBlobData writes a length-prefixed RESP frame into buf using firstByte as the sigil.

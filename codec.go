@@ -1,7 +1,6 @@
 package respcodec
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -110,20 +109,9 @@ func appendEncode(buf []byte, data any) ([]byte, error) {
 // the frame is too short, the CRLF terminator is missing, or the payload contains
 // CR or LF.
 func DecodeSimpleString(buf []byte) (SimpleString, error) {
-	bufLen := len(buf)
-	if bufLen < 3 {
-		return "", fmt.Errorf("buffer too short for SimpleString: need at least 3 bytes, got %d", bufLen)
-	}
-	if buf[0] != '+' {
-		return "", fmt.Errorf("invalid type prefix for SimpleString: expected '+', got %q", buf[0])
-	}
-	if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
-		return "", fmt.Errorf("simple string missing CRLF terminator")
-	}
-
-	payload := buf[1 : bufLen-2]
-	if bytes.ContainsAny(payload, "\r\n") {
-		return "", fmt.Errorf("simple string must not contain CR or LF characters")
+	payload, err := wire.DecodeLineFrame(buf, '+')
+	if err != nil {
+		return "", err
 	}
 	return SimpleString(payload), nil
 }
@@ -133,20 +121,9 @@ func DecodeSimpleString(buf []byte) (SimpleString, error) {
 // you need an error value. Returns an error if the prefix is wrong, the frame is
 // too short, the CRLF terminator is missing, or the payload contains CR or LF.
 func DecodeErrorString(buf []byte) (string, error) {
-	bufLen := len(buf)
-	if bufLen < 3 {
-		return "", fmt.Errorf("buffer too short for error: need at least 3 bytes, got %d", bufLen)
-	}
-	if buf[0] != '-' {
-		return "", fmt.Errorf("invalid type prefix for error: expected '-', got %q", buf[0])
-	}
-	if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
-		return "", fmt.Errorf("error string missing CRLF terminator")
-	}
-
-	payload := buf[1 : bufLen-2]
-	if bytes.ContainsAny(payload, "\r\n") {
-		return "", fmt.Errorf("error string must not contain CR or LF characters")
+	payload, err := wire.DecodeLineFrame(buf, '-')
+	if err != nil {
+		return "", err
 	}
 	return string(payload), nil
 }
@@ -194,33 +171,7 @@ func DecodeInteger(buf []byte) (int, error) {
 // frame is too short, the CRLF terminator is missing, or the declared length does
 // not match the actual payload.
 func DecodeBulkString(buf []byte) (string, error) {
-	bufLen := len(buf)
-	if bufLen < 5 {
-		return "", fmt.Errorf("buffer too short for bulk string: need at least 5 bytes, got %d", bufLen)
-	}
-	if buf[0] != '$' {
-		return "", fmt.Errorf("invalid type prefix for bulk string: expected '$', got %q", buf[0])
-	}
-	if buf[bufLen-2] != '\r' || buf[bufLen-1] != '\n' {
-		return "", fmt.Errorf("bulk string missing CRLF terminator")
-	}
-
-	digits, size, err := calculateDigitsAndSize(buf[1:])
-	if err != nil {
-		return "", err
-	}
-	if size == 0 {
-		if buf[bufLen-4] != '\r' || buf[bufLen-3] != '\n' {
-			return "", fmt.Errorf("empty bulk string missing inner CRLF terminator")
-		}
-		return "", nil
-	}
-
-	payload := buf[digits+3 : bufLen-2]
-	if len(payload) != size {
-		return "", fmt.Errorf("bulk string length mismatch: declared %d, got %d", size, len(payload))
-	}
-	return string(payload), nil
+	return wire.DecodeBlobFrame(buf, '$')
 }
 
 // DecodeNullBulkString validates that buf is exactly the null bulk string frame
