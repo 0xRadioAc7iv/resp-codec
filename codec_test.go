@@ -93,20 +93,73 @@ func BenchmarkAppendEncode(b *testing.B) {
 	}
 }
 
-func Example_decode() {
-	ss, _ := DecodeSimpleString([]byte("+OK\r\n"))
+func ExampleDecode() {
+	ss, _ := Decode([]byte("+OK\r\n"))
+	fmt.Println(ss)
+	e, _ := Decode([]byte("-ERR unknown command\r\n"))
+	fmt.Println(e)
+	n, _ := Decode([]byte(":42\r\n"))
+	fmt.Println(n)
+	s, _ := Decode([]byte("$5\r\nhello\r\n"))
+	fmt.Println(s)
+	null, _ := Decode([]byte("$-1\r\n"))
+	fmt.Println(null == nil)
+	arr, _ := Decode([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
+	fmt.Println(arr)
+	nullArr, _ := Decode([]byte("*-1\r\n"))
+	fmt.Println(nullArr == nil)
+	_, err := Decode([]byte("?unknown\r\n"))
+	fmt.Println(err)
+
+	// Output:
+	// OK
+	// ERR unknown command
+	// 42
+	// hello
+	// true
+	// [1 2 3]
+	// true
+	// unknown RESP type sigil: '?'
+}
+
+func BenchmarkDecode(b *testing.B) {
+	cases := []struct {
+		name  string
+		input []byte
+	}{
+		{"simple string", []byte("+OK\r\n")},
+		{"error", []byte("-ERR unknown command\r\n")},
+		{"integer", []byte(":42\r\n")},
+		{"bulk string", []byte("$5\r\nhello\r\n")},
+		{"null bulk string", []byte("$-1\r\n")},
+		{"null array", []byte("*-1\r\n")},
+		{"array integers", []byte("*3\r\n:1\r\n:2\r\n:3\r\n")},
+		{"array bulk strings", []byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n")},
+	}
+
+	for _, c := range cases {
+		b.Run(c.name, func(b *testing.B) {
+			for b.Loop() {
+				_, _ = Decode(c.input)
+			}
+		})
+	}
+}
+
+func Example_decodeHelpers() {
+	ss, _ := decodeSimpleString([]byte("+OK\r\n"))
 	fmt.Printf("%q\n", ss)
-	e, _ := DecodeErrorString([]byte("-ERR unknown command\r\n"))
+	e, _ := decodeErrorString([]byte("-ERR unknown command\r\n"))
 	fmt.Printf("%q\n", e)
-	n, _ := DecodeInteger([]byte(":42\r\n"))
+	n, _ := decodeInteger([]byte(":42\r\n"))
 	fmt.Printf("%d\n", n)
-	s, _ := DecodeBulkString([]byte("$5\r\nhello\r\n"))
+	s, _ := decodeBulkString([]byte("$5\r\nhello\r\n"))
 	fmt.Printf("%q\n", s)
-	err := DecodeNullBulkString([]byte("$-1\r\n"))
+	err := decodeNullBulkString([]byte("$-1\r\n"))
 	fmt.Printf("%v\n", err == nil)
-	arr, _ := DecodeArray([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
+	arr, _ := decodeArray([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
 	fmt.Printf("%v\n", arr)
-	err = DecodeNullArray([]byte("*-1\r\n"))
+	err = decodeNullArray([]byte("*-1\r\n"))
 	fmt.Printf("%v\n", err == nil)
 
 	// Output:
@@ -119,20 +172,20 @@ func Example_decode() {
 	// true
 }
 
-func BenchmarkDecode(b *testing.B) {
+func BenchmarkDecodeHelpers(b *testing.B) {
 	cases := []struct {
 		name  string
 		input []byte
 		fn    func([]byte)
 	}{
-		{"simple string", []byte("+OK\r\n"), func(b []byte) { _, _ = DecodeSimpleString(b) }},
-		{"error", []byte("-ERR unknown command\r\n"), func(b []byte) { _, _ = DecodeErrorString(b) }},
-		{"integer", []byte(":42\r\n"), func(b []byte) { _, _ = DecodeInteger(b) }},
-		{"bulk string", []byte("$5\r\nhello\r\n"), func(b []byte) { _, _ = DecodeBulkString(b) }},
-		{"null bulk string", []byte("$-1\r\n"), func(b []byte) { _ = DecodeNullBulkString(b) }},
-		{"null array", []byte("*-1\r\n"), func(b []byte) { _ = DecodeNullArray(b) }},
-		{"array integers", []byte("*3\r\n:1\r\n:2\r\n:3\r\n"), func(b []byte) { _, _ = DecodeArray(b) }},
-		{"array bulk strings", []byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"), func(b []byte) { _, _ = DecodeArray(b) }},
+		{"simple string", []byte("+OK\r\n"), func(b []byte) { _, _ = decodeSimpleString(b) }},
+		{"error", []byte("-ERR unknown command\r\n"), func(b []byte) { _, _ = decodeErrorString(b) }},
+		{"integer", []byte(":42\r\n"), func(b []byte) { _, _ = decodeInteger(b) }},
+		{"bulk string", []byte("$5\r\nhello\r\n"), func(b []byte) { _, _ = decodeBulkString(b) }},
+		{"null bulk string", []byte("$-1\r\n"), func(b []byte) { _ = decodeNullBulkString(b) }},
+		{"null array", []byte("*-1\r\n"), func(b []byte) { _ = decodeNullArray(b) }},
+		{"array integers", []byte("*3\r\n:1\r\n:2\r\n:3\r\n"), func(b []byte) { _, _ = decodeArray(b) }},
+		{"array bulk strings", []byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"), func(b []byte) { _, _ = decodeArray(b) }},
 	}
 
 	for _, c := range cases {
@@ -332,8 +385,102 @@ func TestEncode(t *testing.T) {
 }
 
 func TestDecode(t *testing.T) {
+	t.Run("simple string - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte("+OK\r\n"))
+		assertNoError(t, err)
+		if got != SimpleString("OK") {
+			t.Errorf("expected SimpleString(\"OK\"), got %v (%T)", got, got)
+		}
+	})
+
+	t.Run("error - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte("-ERR unknown\r\n"))
+		assertNoError(t, err)
+		e, ok := got.(error)
+		if !ok {
+			t.Fatalf("expected error type, got %T", got)
+		}
+		if e.Error() != "ERR unknown" {
+			t.Errorf("expected %q, got %q", "ERR unknown", e.Error())
+		}
+	})
+
+	t.Run("integer - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte(":42\r\n"))
+		assertNoError(t, err)
+		if got != 42 {
+			t.Errorf("expected 42, got %v", got)
+		}
+	})
+
+	t.Run("bulk string - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte("$5\r\nhello\r\n"))
+		assertNoError(t, err)
+		if got != "hello" {
+			t.Errorf("expected \"hello\", got %v", got)
+		}
+	})
+
+	t.Run("null bulk string - decodes to nil", func(t *testing.T) {
+		got, err := Decode([]byte("$-1\r\n"))
+		assertNoError(t, err)
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("null bulk string - invalid frame returns error", func(t *testing.T) {
+		_, err := Decode([]byte("$-2\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid null bulk string, got nil")
+		}
+	})
+
+	t.Run("array - dispatches correctly", func(t *testing.T) {
+		got, err := Decode([]byte("*2\r\n:1\r\n:2\r\n"))
+		assertNoError(t, err)
+		arr, ok := got.([]any)
+		if !ok {
+			t.Fatalf("expected []any, got %T", got)
+		}
+		if len(arr) != 2 || arr[0] != 1 || arr[1] != 2 {
+			t.Errorf("expected [1 2], got %v", arr)
+		}
+	})
+
+	t.Run("null array - decodes to nil", func(t *testing.T) {
+		got, err := Decode([]byte("*-1\r\n"))
+		assertNoError(t, err)
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("null array - invalid frame returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*-2\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid null array, got nil")
+		}
+	})
+
+	t.Run("unknown sigil returns error", func(t *testing.T) {
+		_, err := Decode([]byte("?unknown\r\n"))
+		if err == nil {
+			t.Error("expected error for unknown sigil, got nil")
+		}
+	})
+
+	t.Run("empty buffer returns error", func(t *testing.T) {
+		_, err := Decode([]byte{})
+		if err == nil {
+			t.Error("expected error for empty buffer, got nil")
+		}
+	})
+}
+
+func TestDecodeHelpers(t *testing.T) {
 	t.Run("simple string - ok", func(t *testing.T) {
-		got, err := DecodeSimpleString([]byte("+OK\r\n"))
+		got, err := decodeSimpleString([]byte("+OK\r\n"))
 		assertNoError(t, err)
 		if got != SimpleString("OK") {
 			t.Errorf("expected %q, got %q", SimpleString("OK"), got)
@@ -341,7 +488,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("simple string - empty", func(t *testing.T) {
-		got, err := DecodeSimpleString([]byte("+\r\n"))
+		got, err := decodeSimpleString([]byte("+\r\n"))
 		assertNoError(t, err)
 		if got != SimpleString("") {
 			t.Errorf("expected empty SimpleString, got %q", got)
@@ -349,7 +496,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("simple string - multi word", func(t *testing.T) {
-		got, err := DecodeSimpleString([]byte("+hello world\r\n"))
+		got, err := decodeSimpleString([]byte("+hello world\r\n"))
 		assertNoError(t, err)
 		if got != SimpleString("hello world") {
 			t.Errorf("expected %q, got %q", SimpleString("hello world"), got)
@@ -357,21 +504,21 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("simple string - wrong prefix returns error", func(t *testing.T) {
-		_, err := DecodeSimpleString([]byte("-ERR\r\n"))
+		_, err := decodeSimpleString([]byte("-ERR\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("simple string - empty buffer returns error", func(t *testing.T) {
-		_, err := DecodeSimpleString([]byte{})
+		_, err := decodeSimpleString([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
 		}
 	})
 
 	t.Run("error - basic message", func(t *testing.T) {
-		got, err := DecodeErrorString([]byte("-ERR unknown command\r\n"))
+		got, err := decodeErrorString([]byte("-ERR unknown command\r\n"))
 		assertNoError(t, err)
 		if got != "ERR unknown command" {
 			t.Errorf("expected %q, got %q", "ERR unknown command", got)
@@ -379,7 +526,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("error - empty message", func(t *testing.T) {
-		got, err := DecodeErrorString([]byte("-\r\n"))
+		got, err := decodeErrorString([]byte("-\r\n"))
 		assertNoError(t, err)
 		if got != "" {
 			t.Errorf("expected empty error message, got %q", got)
@@ -387,7 +534,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("error - WRONGTYPE prefix", func(t *testing.T) {
-		got, err := DecodeErrorString([]byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"))
+		got, err := decodeErrorString([]byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"))
 		assertNoError(t, err)
 		if got != "WRONGTYPE Operation against a key holding the wrong kind of value" {
 			t.Errorf("unexpected error message: %q", got)
@@ -395,21 +542,21 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("error - wrong prefix returns error", func(t *testing.T) {
-		_, err := DecodeErrorString([]byte("+OK\r\n"))
+		_, err := decodeErrorString([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("error - empty buffer returns error", func(t *testing.T) {
-		_, err := DecodeErrorString([]byte{})
+		_, err := decodeErrorString([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
 		}
 	})
 
 	t.Run("integer - positive", func(t *testing.T) {
-		got, err := DecodeInteger([]byte(":42\r\n"))
+		got, err := decodeInteger([]byte(":42\r\n"))
 		assertNoError(t, err)
 		if got != 42 {
 			t.Errorf("expected 42, got %d", got)
@@ -417,7 +564,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("integer - zero", func(t *testing.T) {
-		got, err := DecodeInteger([]byte(":0\r\n"))
+		got, err := decodeInteger([]byte(":0\r\n"))
 		assertNoError(t, err)
 		if got != 0 {
 			t.Errorf("expected 0, got %d", got)
@@ -425,7 +572,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("integer - negative", func(t *testing.T) {
-		got, err := DecodeInteger([]byte(":-1\r\n"))
+		got, err := decodeInteger([]byte(":-1\r\n"))
 		assertNoError(t, err)
 		if got != -1 {
 			t.Errorf("expected -1, got %d", got)
@@ -433,7 +580,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("integer - large value", func(t *testing.T) {
-		got, err := DecodeInteger([]byte(":1000000\r\n"))
+		got, err := decodeInteger([]byte(":1000000\r\n"))
 		assertNoError(t, err)
 		if got != 1000000 {
 			t.Errorf("expected 1000000, got %d", got)
@@ -442,7 +589,7 @@ func TestDecode(t *testing.T) {
 
 	t.Run("integer - max int", func(t *testing.T) {
 		buf := fmt.Appendf(nil, ":%d\r\n", math.MaxInt)
-		got, err := DecodeInteger(buf)
+		got, err := decodeInteger(buf)
 		assertNoError(t, err)
 		if got != math.MaxInt {
 			t.Errorf("expected %d, got %d", math.MaxInt, got)
@@ -451,7 +598,7 @@ func TestDecode(t *testing.T) {
 
 	t.Run("integer - min int", func(t *testing.T) {
 		buf := fmt.Appendf(nil, ":%d\r\n", math.MinInt)
-		got, err := DecodeInteger(buf)
+		got, err := decodeInteger(buf)
 		assertNoError(t, err)
 		if got != math.MinInt {
 			t.Errorf("expected %d, got %d", math.MinInt, got)
@@ -459,28 +606,28 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("integer - invalid character returns error", func(t *testing.T) {
-		_, err := DecodeInteger([]byte(":abc\r\n"))
+		_, err := decodeInteger([]byte(":abc\r\n"))
 		if err == nil {
 			t.Error("expected error for non-digit character, got nil")
 		}
 	})
 
 	t.Run("integer - wrong prefix returns error", func(t *testing.T) {
-		_, err := DecodeInteger([]byte("+OK\r\n"))
+		_, err := decodeInteger([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("integer - empty buffer returns error", func(t *testing.T) {
-		_, err := DecodeInteger([]byte{})
+		_, err := decodeInteger([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
 		}
 	})
 
 	t.Run("bulk string - normal", func(t *testing.T) {
-		got, err := DecodeBulkString([]byte("$6\r\nfoobar\r\n"))
+		got, err := decodeBulkString([]byte("$6\r\nfoobar\r\n"))
 		assertNoError(t, err)
 		if got != "foobar" {
 			t.Errorf("expected %q, got %q", "foobar", got)
@@ -488,7 +635,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("bulk string - empty", func(t *testing.T) {
-		got, err := DecodeBulkString([]byte("$0\r\n\r\n"))
+		got, err := decodeBulkString([]byte("$0\r\n\r\n"))
 		assertNoError(t, err)
 		if got != "" {
 			t.Errorf("expected empty string, got %q", got)
@@ -496,7 +643,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("bulk string - with spaces", func(t *testing.T) {
-		got, err := DecodeBulkString([]byte("$11\r\nhello world\r\n"))
+		got, err := decodeBulkString([]byte("$11\r\nhello world\r\n"))
 		assertNoError(t, err)
 		if got != "hello world" {
 			t.Errorf("expected %q, got %q", "hello world", got)
@@ -504,7 +651,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("bulk string - binary safe with CRLF in content", func(t *testing.T) {
-		got, err := DecodeBulkString([]byte("$12\r\nhello\r\nworld\r\n"))
+		got, err := decodeBulkString([]byte("$12\r\nhello\r\nworld\r\n"))
 		assertNoError(t, err)
 		if got != "hello\r\nworld" {
 			t.Errorf("expected %q, got %q", "hello\r\nworld", got)
@@ -512,59 +659,59 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("bulk string - length mismatch returns error", func(t *testing.T) {
-		_, err := DecodeBulkString([]byte("$3\r\nhello\r\n"))
+		_, err := decodeBulkString([]byte("$3\r\nhello\r\n"))
 		if err == nil {
 			t.Error("expected error for length mismatch, got nil")
 		}
 	})
 
 	t.Run("bulk string - wrong prefix returns error", func(t *testing.T) {
-		_, err := DecodeBulkString([]byte("+OK\r\n"))
+		_, err := decodeBulkString([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("bulk string - empty buffer returns error", func(t *testing.T) {
-		_, err := DecodeBulkString([]byte{})
+		_, err := decodeBulkString([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
 		}
 	})
 
 	t.Run("null bulk string - decodes correctly", func(t *testing.T) {
-		err := DecodeNullBulkString([]byte("$-1\r\n"))
+		err := decodeNullBulkString([]byte("$-1\r\n"))
 		assertNoError(t, err)
 	})
 
 	t.Run("null bulk string - wrong prefix returns error", func(t *testing.T) {
-		err := DecodeNullBulkString([]byte("+OK\r\n"))
+		err := decodeNullBulkString([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("null bulk string - non-null payload returns error", func(t *testing.T) {
-		err := DecodeNullBulkString([]byte("$6\r\nfoobar\r\n"))
+		err := decodeNullBulkString([]byte("$6\r\nfoobar\r\n"))
 		if err == nil {
 			t.Error("expected error for non-null bulk string, got nil")
 		}
 	})
 
 	t.Run("null array - decodes correctly", func(t *testing.T) {
-		err := DecodeNullArray([]byte("*-1\r\n"))
+		err := decodeNullArray([]byte("*-1\r\n"))
 		assertNoError(t, err)
 	})
 
 	t.Run("null array - wrong prefix returns error", func(t *testing.T) {
-		err := DecodeNullArray([]byte("+OK\r\n"))
+		err := decodeNullArray([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("null array - non-null payload returns error", func(t *testing.T) {
-		err := DecodeNullArray([]byte("*2\r\n+OK\r\n+OK\r\n"))
+		err := decodeNullArray([]byte("*2\r\n+OK\r\n+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for non-null array, got nil")
 		}
@@ -572,7 +719,7 @@ func TestDecode(t *testing.T) {
 
 	// *0\r\n
 	t.Run("array - empty", func(t *testing.T) {
-		got, err := DecodeArray([]byte("*0\r\n"))
+		got, err := decodeArray([]byte("*0\r\n"))
 		assertNoError(t, err)
 		if len(got) != 0 {
 			t.Errorf("expected empty slice, got %v", got)
@@ -581,7 +728,7 @@ func TestDecode(t *testing.T) {
 
 	// *3\r\n:1\r\n:2\r\n:3\r\n
 	t.Run("array - integers", func(t *testing.T) {
-		got, err := DecodeArray([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
+		got, err := decodeArray([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
 		assertNoError(t, err)
 		if len(got) != 3 {
 			t.Fatalf("expected 3 elements, got %d", len(got))
@@ -593,7 +740,7 @@ func TestDecode(t *testing.T) {
 
 	// *2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n
 	t.Run("array - bulk strings", func(t *testing.T) {
-		got, err := DecodeArray([]byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"))
+		got, err := decodeArray([]byte("*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"))
 		assertNoError(t, err)
 		if len(got) != 2 {
 			t.Fatalf("expected 2 elements, got %d", len(got))
@@ -605,7 +752,7 @@ func TestDecode(t *testing.T) {
 
 	// *5\r\n:1\r\n:2\r\n:3\r\n:4\r\n$6\r\nfoobar\r\n
 	t.Run("array - mixed types", func(t *testing.T) {
-		got, err := DecodeArray([]byte("*5\r\n:1\r\n:2\r\n:3\r\n:4\r\n$6\r\nfoobar\r\n"))
+		got, err := decodeArray([]byte("*5\r\n:1\r\n:2\r\n:3\r\n:4\r\n$6\r\nfoobar\r\n"))
 		assertNoError(t, err)
 		if len(got) != 5 {
 			t.Fatalf("expected 5 elements, got %d", len(got))
@@ -620,7 +767,7 @@ func TestDecode(t *testing.T) {
 
 	// *3\r\n+OK\r\n-ERR\r\n:42\r\n
 	t.Run("array - simple string, error, and int", func(t *testing.T) {
-		got, err := DecodeArray([]byte("*3\r\n+OK\r\n-ERR\r\n:42\r\n"))
+		got, err := decodeArray([]byte("*3\r\n+OK\r\n-ERR\r\n:42\r\n"))
 		assertNoError(t, err)
 		if len(got) != 3 {
 			t.Fatalf("expected 3 elements, got %d", len(got))
@@ -638,7 +785,7 @@ func TestDecode(t *testing.T) {
 
 	// *2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n
 	t.Run("array - nested arrays", func(t *testing.T) {
-		got, err := DecodeArray([]byte("*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n"))
+		got, err := decodeArray([]byte("*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n"))
 		assertNoError(t, err)
 		if len(got) != 2 {
 			t.Fatalf("expected 2 elements, got %d", len(got))
@@ -661,7 +808,7 @@ func TestDecode(t *testing.T) {
 
 	// *2\r\n*-1\r\n$3\r\nfoo\r\n — null array element decodes as nil
 	t.Run("array - null array element", func(t *testing.T) {
-		got, err := DecodeArray([]byte("*2\r\n*-1\r\n$3\r\nfoo\r\n"))
+		got, err := decodeArray([]byte("*2\r\n*-1\r\n$3\r\nfoo\r\n"))
 		assertNoError(t, err)
 		if len(got) != 2 {
 			t.Fatalf("expected 2 elements, got %d", len(got))
@@ -676,7 +823,7 @@ func TestDecode(t *testing.T) {
 
 	// *3\r\n$3\r\nfoo\r\n$-1\r\n$3\r\nbar\r\n — null element in array decodes as nil
 	t.Run("array - null element", func(t *testing.T) {
-		got, err := DecodeArray([]byte("*3\r\n$3\r\nfoo\r\n$-1\r\n$3\r\nbar\r\n"))
+		got, err := decodeArray([]byte("*3\r\n$3\r\nfoo\r\n$-1\r\n$3\r\nbar\r\n"))
 		assertNoError(t, err)
 		if len(got) != 3 {
 			t.Fatalf("expected 3 elements, got %d", len(got))
@@ -693,14 +840,14 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("array - wrong prefix returns error", func(t *testing.T) {
-		_, err := DecodeArray([]byte("+OK\r\n"))
+		_, err := decodeArray([]byte("+OK\r\n"))
 		if err == nil {
 			t.Error("expected error for wrong prefix, got nil")
 		}
 	})
 
 	t.Run("array - empty buffer returns error", func(t *testing.T) {
-		_, err := DecodeArray([]byte{})
+		_, err := decodeArray([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
 		}
@@ -712,7 +859,7 @@ func TestRoundTrip(t *testing.T) {
 		input := SimpleString("OK")
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeSimpleString(buf)
+		got, err := decodeSimpleString(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %q, got %q", input, got)
@@ -723,7 +870,7 @@ func TestRoundTrip(t *testing.T) {
 		input := SimpleString("")
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeSimpleString(buf)
+		got, err := decodeSimpleString(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %q, got %q", input, got)
@@ -734,7 +881,7 @@ func TestRoundTrip(t *testing.T) {
 		input := SimpleString("hello world")
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeSimpleString(buf)
+		got, err := decodeSimpleString(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %q, got %q", input, got)
@@ -745,7 +892,7 @@ func TestRoundTrip(t *testing.T) {
 		input := errors.New("ERR unknown command")
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeErrorString(buf)
+		got, err := decodeErrorString(buf)
 		assertNoError(t, err)
 		if got != input.Error() {
 			t.Errorf("expected %q, got %q", input.Error(), got)
@@ -756,7 +903,7 @@ func TestRoundTrip(t *testing.T) {
 		input := errors.New("")
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeErrorString(buf)
+		got, err := decodeErrorString(buf)
 		assertNoError(t, err)
 		if got != "" {
 			t.Errorf("expected empty string, got %q", got)
@@ -767,7 +914,7 @@ func TestRoundTrip(t *testing.T) {
 		input := errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeErrorString(buf)
+		got, err := decodeErrorString(buf)
 		assertNoError(t, err)
 		if got != input.Error() {
 			t.Errorf("expected %q, got %q", input.Error(), got)
@@ -778,7 +925,7 @@ func TestRoundTrip(t *testing.T) {
 		input := 42
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeInteger(buf)
+		got, err := decodeInteger(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %d, got %d", input, got)
@@ -789,7 +936,7 @@ func TestRoundTrip(t *testing.T) {
 		input := 0
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeInteger(buf)
+		got, err := decodeInteger(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %d, got %d", input, got)
@@ -800,7 +947,7 @@ func TestRoundTrip(t *testing.T) {
 		input := -1
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeInteger(buf)
+		got, err := decodeInteger(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %d, got %d", input, got)
@@ -811,7 +958,7 @@ func TestRoundTrip(t *testing.T) {
 		input := math.MaxInt
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeInteger(buf)
+		got, err := decodeInteger(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %d, got %d", input, got)
@@ -822,7 +969,7 @@ func TestRoundTrip(t *testing.T) {
 		input := math.MinInt
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeInteger(buf)
+		got, err := decodeInteger(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %d, got %d", input, got)
@@ -833,7 +980,7 @@ func TestRoundTrip(t *testing.T) {
 		input := "hello"
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeBulkString(buf)
+		got, err := decodeBulkString(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %q, got %q", input, got)
@@ -844,7 +991,7 @@ func TestRoundTrip(t *testing.T) {
 		input := ""
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeBulkString(buf)
+		got, err := decodeBulkString(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected empty string, got %q", got)
@@ -855,7 +1002,7 @@ func TestRoundTrip(t *testing.T) {
 		input := "hello world"
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeBulkString(buf)
+		got, err := decodeBulkString(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %q, got %q", input, got)
@@ -866,7 +1013,7 @@ func TestRoundTrip(t *testing.T) {
 		input := "hello\r\nworld"
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeBulkString(buf)
+		got, err := decodeBulkString(buf)
 		assertNoError(t, err)
 		if got != input {
 			t.Errorf("expected %q, got %q", input, got)
@@ -876,14 +1023,14 @@ func TestRoundTrip(t *testing.T) {
 	t.Run("null bulk string", func(t *testing.T) {
 		buf, err := Encode(Null)
 		assertNoError(t, err)
-		err = DecodeNullBulkString(buf)
+		err = decodeNullBulkString(buf)
 		assertNoError(t, err)
 	})
 
 	t.Run("null array", func(t *testing.T) {
 		buf, err := Encode(NullArr)
 		assertNoError(t, err)
-		err = DecodeNullArray(buf)
+		err = decodeNullArray(buf)
 		assertNoError(t, err)
 	})
 
@@ -891,7 +1038,7 @@ func TestRoundTrip(t *testing.T) {
 		input := []any{}
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeArray(buf)
+		got, err := decodeArray(buf)
 		assertNoError(t, err)
 		if len(got) != 0 {
 			t.Errorf("expected empty slice, got %v", got)
@@ -902,7 +1049,7 @@ func TestRoundTrip(t *testing.T) {
 		input := []any{1, 2, 3}
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeArray(buf)
+		got, err := decodeArray(buf)
 		assertNoError(t, err)
 		if len(got) != 3 {
 			t.Fatalf("expected 3 elements, got %d", len(got))
@@ -916,7 +1063,7 @@ func TestRoundTrip(t *testing.T) {
 		input := []any{"GET", "key"}
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeArray(buf)
+		got, err := decodeArray(buf)
 		assertNoError(t, err)
 		if len(got) != 2 {
 			t.Fatalf("expected 2 elements, got %d", len(got))
@@ -930,7 +1077,7 @@ func TestRoundTrip(t *testing.T) {
 		input := []any{SimpleString("OK"), errors.New("ERR"), 42, "hello"}
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeArray(buf)
+		got, err := decodeArray(buf)
 		assertNoError(t, err)
 		if len(got) != 4 {
 			t.Fatalf("expected 4 elements, got %d", len(got))
@@ -953,7 +1100,7 @@ func TestRoundTrip(t *testing.T) {
 		input := []any{"foo", Null, "bar"}
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeArray(buf)
+		got, err := decodeArray(buf)
 		assertNoError(t, err)
 		if len(got) != 3 {
 			t.Fatalf("expected 3 elements, got %d", len(got))
@@ -973,7 +1120,7 @@ func TestRoundTrip(t *testing.T) {
 		input := []any{NullArr, "foo"}
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeArray(buf)
+		got, err := decodeArray(buf)
 		assertNoError(t, err)
 		if len(got) != 2 {
 			t.Fatalf("expected 2 elements, got %d", len(got))
@@ -993,7 +1140,7 @@ func TestRoundTrip(t *testing.T) {
 		}
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeArray(buf)
+		got, err := decodeArray(buf)
 		assertNoError(t, err)
 		if len(got) != 2 {
 			t.Fatalf("expected 2 elements, got %d", len(got))
@@ -1024,7 +1171,7 @@ func TestRoundTrip(t *testing.T) {
 		input := []any{"GET", "key"}
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeArray(buf)
+		got, err := decodeArray(buf)
 		assertNoError(t, err)
 		if len(got) != 2 {
 			t.Fatalf("expected 2 elements, got %d", len(got))
@@ -1038,7 +1185,7 @@ func TestRoundTrip(t *testing.T) {
 		input := []any{"SET", "key", "value"}
 		buf, err := Encode(input)
 		assertNoError(t, err)
-		got, err := DecodeArray(buf)
+		got, err := decodeArray(buf)
 		assertNoError(t, err)
 		if len(got) != 3 {
 			t.Fatalf("expected 3 elements, got %d", len(got))
@@ -1061,7 +1208,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := DecodeSimpleString(input)
+				_, err := decodeSimpleString(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed simple string %q", input)
 				}
@@ -1080,7 +1227,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := DecodeErrorString(input)
+				_, err := decodeErrorString(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed error %q", input)
 				}
@@ -1100,7 +1247,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := DecodeInteger(input)
+				_, err := decodeInteger(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed integer %q", input)
 				}
@@ -1121,7 +1268,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := DecodeBulkString(input)
+				_, err := decodeBulkString(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed bulk string %q", input)
 				}
@@ -1140,7 +1287,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				err := DecodeNullBulkString(input)
+				err := decodeNullBulkString(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed null bulk string %q", input)
 				}
@@ -1159,7 +1306,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				err := DecodeNullArray(input)
+				err := decodeNullArray(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed null array %q", input)
 				}
@@ -1179,7 +1326,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := DecodeArray(input)
+				_, err := decodeArray(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed array %q", input)
 				}
@@ -1207,7 +1354,7 @@ func TestDecodeMalformedFrames(t *testing.T) {
 
 		for name, input := range cases {
 			t.Run(name, func(t *testing.T) {
-				_, err := DecodeArray(input)
+				_, err := decodeArray(input)
 				if err == nil {
 					t.Fatalf("expected error for malformed element in array %q", input)
 				}

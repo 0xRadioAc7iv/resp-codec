@@ -49,19 +49,19 @@ buf, err  = respcodec.AppendEncode(buf, 42)
 
 ### Decode
 
-Each RESP type has its own decode function. Call the one that matches the wire prefix you expect:
+`Decode` parses a single complete RESP frame and returns the decoded Go value, dispatched by wire-format prefix:
 
 ```go
-ss,  err := respcodec.DecodeSimpleString([]byte("+OK\r\n"))
-msg, err := respcodec.DecodeErrorString([]byte("-ERR unknown\r\n")) // returns string, not error
-n,   err := respcodec.DecodeInteger([]byte(":42\r\n"))
-s,   err := respcodec.DecodeBulkString([]byte("$5\r\nhello\r\n"))
-arr, err := respcodec.DecodeArray([]byte("*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n"))
-err       = respcodec.DecodeNullBulkString([]byte("$-1\r\n"))
-err       = respcodec.DecodeNullArray([]byte("*-1\r\n"))
+ss,  err := respcodec.Decode([]byte("+OK\r\n"))                          // SimpleString("OK")
+msg, err := respcodec.Decode([]byte("-ERR unknown\r\n"))                 // error
+n,   err := respcodec.Decode([]byte(":42\r\n"))                          // 42
+s,   err := respcodec.Decode([]byte("$5\r\nhello\r\n"))                  // "hello"
+arr, err := respcodec.Decode([]byte("*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n")) // []any{"GET", "key"}
+null, err := respcodec.Decode([]byte("$-1\r\n"))                         // nil
+nullArr, err := respcodec.Decode([]byte("*-1\r\n"))                      // nil
 ```
 
-`DecodeErrorString` returns the message text as a `string`. Wrap it with `errors.New` if you need an `error` value.
+For the `-` (error) type, `Decode` returns an `error` value, not a plain string.
 
 ## Testing
 

@@ -1,7 +1,6 @@
 package resp3
 
 import (
-	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -220,21 +219,8 @@ func Decode(buf []byte) (any, error) {
 	}
 
 	switch buf[0] {
-	case '+':
-		return respcodec.DecodeSimpleString(buf)
-
-	case '-':
-		s, err := respcodec.DecodeErrorString(buf)
-		if err != nil {
-			return nil, err
-		}
-		return errors.New(s), nil
-
-	case ':':
-		return respcodec.DecodeInteger(buf)
-
-	case '$':
-		return respcodec.DecodeBulkString(buf)
+	case '+', '-', ':', '$':
+		return respcodec.Decode(buf)
 
 	case '!':
 		s, err := wire.DecodeBlobFrame(buf, '!')

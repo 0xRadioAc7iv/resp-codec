@@ -5,9 +5,8 @@
 // Encoding: use Encode to serialize a value into a fresh buffer, or AppendEncode
 // to write into a caller-supplied buffer for zero-allocation reuse.
 //
-// Decoding: each RESP type has its own typed function — DecodeSimpleString,
-// DecodeErrorString, DecodeInteger, DecodeBulkString, DecodeArray,
-// DecodeNullBulkString, and DecodeNullArray.
+// Decoding: use Decode to parse a single complete frame and get back the
+// decoded Go value, dispatched by wire-format prefix.
 package respcodec
 
 // SimpleString represents a RESP simple string (prefix '+').
