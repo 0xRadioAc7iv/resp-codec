@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"testing"
 
@@ -494,6 +495,10 @@ func ExampleDecode() {
 	fmt.Println(v)
 	v, _ = Decode([]byte("=9\r\ntxt:hello\r\n"))
 	fmt.Println(v)
+	v, _ = Decode([]byte("(123456789012345678901234567890\r\n"))
+	fmt.Println(v)
+	v, _ = Decode([]byte(",3.14\r\n"))
+	fmt.Println(v)
 	v, _ = Decode([]byte("_\r\n"))
 	fmt.Println(v == Null)
 	v, _ = Decode([]byte("#t\r\n"))
@@ -510,6 +515,8 @@ func ExampleDecode() {
 	// hello
 	// ERR oops
 	// txt:hello
+	// 123456789012345678901234567890
+	// 3.14
 	// true
 	// true
 	// false
@@ -599,6 +606,158 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
+	t.Run("big number - positive", func(t *testing.T) {
+		got, err := Decode([]byte("(123456789012345678901234567890\r\n"))
+		assertNoError(t, err)
+		n, ok := got.(*big.Int)
+		if !ok {
+			t.Fatalf("expected *big.Int, got %T", got)
+		}
+		want, _ := new(big.Int).SetString("123456789012345678901234567890", 10)
+		if n.Cmp(want) != 0 {
+			t.Errorf("expected %s, got %s", want, n)
+		}
+	})
+
+	t.Run("big number - negative", func(t *testing.T) {
+		got, err := Decode([]byte("(-123456789012345678901234567890\r\n"))
+		assertNoError(t, err)
+		n, ok := got.(*big.Int)
+		if !ok {
+			t.Fatalf("expected *big.Int, got %T", got)
+		}
+		want, _ := new(big.Int).SetString("-123456789012345678901234567890", 10)
+		if n.Cmp(want) != 0 {
+			t.Errorf("expected %s, got %s", want, n)
+		}
+	})
+
+	t.Run("big number - zero", func(t *testing.T) {
+		got, err := Decode([]byte("(0\r\n"))
+		assertNoError(t, err)
+		n, ok := got.(*big.Int)
+		if !ok {
+			t.Fatalf("expected *big.Int, got %T", got)
+		}
+		if n.Sign() != 0 {
+			t.Errorf("expected 0, got %s", n)
+		}
+	})
+
+	t.Run("big number - invalid value returns error", func(t *testing.T) {
+		_, err := Decode([]byte("(12x34\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid big number value, got nil")
+		}
+	})
+
+	t.Run("big number - missing CRLF returns error", func(t *testing.T) {
+		_, err := Decode([]byte("(123"))
+		if err == nil {
+			t.Error("expected error for missing CRLF, got nil")
+		}
+	})
+
+	t.Run("big number - too short returns error", func(t *testing.T) {
+		_, err := Decode([]byte("("))
+		if err == nil {
+			t.Error("expected error for too-short frame, got nil")
+		}
+	})
+
+	t.Run("double - positive", func(t *testing.T) {
+		got, err := Decode([]byte(",3.14\r\n"))
+		assertNoError(t, err)
+		f, ok := got.(float64)
+		if !ok {
+			t.Fatalf("expected float64, got %T", got)
+		}
+		if f != 3.14 {
+			t.Errorf("expected 3.14, got %v", f)
+		}
+	})
+
+	t.Run("double - negative", func(t *testing.T) {
+		got, err := Decode([]byte(",-1.5\r\n"))
+		assertNoError(t, err)
+		f, ok := got.(float64)
+		if !ok {
+			t.Fatalf("expected float64, got %T", got)
+		}
+		if f != -1.5 {
+			t.Errorf("expected -1.5, got %v", f)
+		}
+	})
+
+	t.Run("double - zero", func(t *testing.T) {
+		got, err := Decode([]byte(",0\r\n"))
+		assertNoError(t, err)
+		f, ok := got.(float64)
+		if !ok {
+			t.Fatalf("expected float64, got %T", got)
+		}
+		if f != 0 {
+			t.Errorf("expected 0, got %v", f)
+		}
+	})
+
+	t.Run("double - inf", func(t *testing.T) {
+		got, err := Decode([]byte(",inf\r\n"))
+		assertNoError(t, err)
+		f, ok := got.(float64)
+		if !ok {
+			t.Fatalf("expected float64, got %T", got)
+		}
+		if !math.IsInf(f, 1) {
+			t.Errorf("expected +Inf, got %v", f)
+		}
+	})
+
+	t.Run("double - negative inf", func(t *testing.T) {
+		got, err := Decode([]byte(",-inf\r\n"))
+		assertNoError(t, err)
+		f, ok := got.(float64)
+		if !ok {
+			t.Fatalf("expected float64, got %T", got)
+		}
+		if !math.IsInf(f, -1) {
+			t.Errorf("expected -Inf, got %v", f)
+		}
+	})
+
+	t.Run("double - nan", func(t *testing.T) {
+		got, err := Decode([]byte(",nan\r\n"))
+		assertNoError(t, err)
+		f, ok := got.(float64)
+		if !ok {
+			t.Fatalf("expected float64, got %T", got)
+		}
+		if !math.IsNaN(f) {
+			t.Errorf("expected NaN, got %v", f)
+		}
+	})
+
+	t.Run("double - invalid value returns error", func(t *testing.T) {
+		_, err := Decode([]byte(",12x34\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid double value, got nil")
+		}
+	})
+
+	t.Run("double - missing CRLF returns error", func(t *testing.T) {
+		_, err := Decode([]byte(",3.14"))
+		if err == nil {
+			t.Error("expected error for missing CRLF, got nil")
+		}
+	})
+
+	t.Run("double - too short returns error", func(t *testing.T) {
+		_, err := Decode([]byte(","))
+		if err == nil {
+			t.Error("expected error for too-short frame, got nil")
+		}
+	})
+
 	t.Run("null - decodes correctly", func(t *testing.T) {
 		got, err := Decode([]byte("_\r\n"))
 		assertNoError(t, err)
@@ -663,6 +822,8 @@ func BenchmarkDecode(b *testing.B) {
 		{"blob string", []byte("$5\r\nhello\r\n")},
 		{"blob error", []byte("!8\r\nERR oops\r\n")},
 		{"verbatim string", []byte("=9\r\ntxt:hello\r\n")},
+		{"big number", []byte("(123456789012345678901234567890\r\n")},
+		{"double", []byte(",3.14\r\n")},
 		{"null", []byte("_\r\n")},
 		{"boolean true", []byte("#t\r\n")},
 		{"boolean false", []byte("#f\r\n")},
