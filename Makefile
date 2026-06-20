@@ -1,4 +1,4 @@
-.PHONY: test test-cov bench bench-root bench-wire bench-resp3
+.PHONY: test test-cov test-integration bench bench-root bench-wire bench-resp3
 
 test:
 	go test ./... -v
@@ -6,6 +6,9 @@ test:
 test-cov:
 	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out
+
+test-integration:
+	go test -tags integration ./resp3/... -v
 
 bench-root:
 	go test -bench=. -benchmem .

@@ -110,6 +110,16 @@ with coverage:
 make test-cov
 ```
 
+### Integration tests
+
+`resp3` also has integration tests that run against a real Redis 6+ server, verifying that `Encode`/`Decode` round-trip correctly with what an actual server sends and accepts on the wire (not just synthetic frames). They're excluded from the default test run via a build tag, so a Redis instance isn't required for normal development:
+
+```sh
+make test-integration
+```
+
+This connects to `localhost:6379` by default; set `REDIS_ADDR` to point elsewhere. Tests skip automatically if no server is reachable.
+
 ## Benchmarks
 
 Run benchmarks:

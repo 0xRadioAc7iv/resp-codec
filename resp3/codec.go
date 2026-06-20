@@ -491,6 +491,22 @@ func (p *parser) parseArray() (any, error) {
 	return result, nil
 }
 
+// asSimpleString coerces a decoded value into a respcodec.SimpleString, for
+// contexts that need one (map/attribute keys, push kind). The RESP3 spec
+// doesn't mandate a specific type for these, and real Redis servers commonly
+// send them as blob strings (e.g. HELLO, HGETALL, CONFIG GET all send map
+// keys as blob strings) rather than simple strings, so both are accepted.
+func asSimpleString(v any) (respcodec.SimpleString, bool) {
+	switch k := v.(type) {
+	case respcodec.SimpleString:
+		return k, true
+	case string:
+		return respcodec.SimpleString(k), true
+	default:
+		return "", false
+	}
+}
+
 func (p *parser) parseMap() (any, error) {
 	pairCount, err := p.readHeaderCount()
 	if err != nil {
@@ -502,9 +518,9 @@ func (p *parser) parseMap() (any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("map key %d: %w", i, err)
 		}
-		key, ok := k.(respcodec.SimpleString)
+		key, ok := asSimpleString(k)
 		if !ok {
-			return nil, fmt.Errorf("invalid map key at pair %d: expected SimpleString, got %T", i, k)
+			return nil, fmt.Errorf("invalid map key at pair %d: expected SimpleString or string, got %T", i, k)
 		}
 		if _, exists := result[key]; exists {
 			return nil, fmt.Errorf("duplicate map key at pair %d: %q", i, key)
@@ -545,9 +561,9 @@ func (p *parser) parseAttribute() (any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("attribute key %d: %w", i, err)
 		}
-		key, ok := k.(respcodec.SimpleString)
+		key, ok := asSimpleString(k)
 		if !ok {
-			return nil, fmt.Errorf("invalid attribute key at pair %d: expected SimpleString, got %T", i, k)
+			return nil, fmt.Errorf("invalid attribute key at pair %d: expected SimpleString or string, got %T", i, k)
 		}
 		if _, exists := result[key]; exists {
 			return nil, fmt.Errorf("duplicate attribute key at pair %d: %q", i, key)
@@ -573,9 +589,9 @@ func (p *parser) parsePush() (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("push kind: %w", err)
 	}
-	kind, ok := kindVal.(respcodec.SimpleString)
+	kind, ok := asSimpleString(kindVal)
 	if !ok {
-		return nil, fmt.Errorf("invalid push kind: expected SimpleString, got %T", kindVal)
+		return nil, fmt.Errorf("invalid push kind: expected SimpleString or string, got %T", kindVal)
 	}
 	var args []any
 	if count > 1 {
