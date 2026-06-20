@@ -67,6 +67,8 @@ For the `-` (error) type, `Decode` returns an `error` value, not a plain string.
 
 The `resp3` subpackage implements [RESP3](https://github.com/redis/redis-specifications/blob/master/protocol/RESP3.md), the protocol used by Redis 6+ in protover 3 mode. It adds new types on top of RESP2 (big numbers, doubles, booleans, blob errors, verbatim strings, maps, sets, attributes, and push messages) and reinterprets RESP2's null as a single unified null type.
 
+`resp3.Decode` is a recursive-descent parser over a shared cursor, the same approach Redis's own client-side reply parser uses: aggregate types (arrays, maps, sets, attributes, push) don't pre-compute how many bytes a nested element occupies, they just decode the next value and let the cursor advance by exactly as much as that value needed. This means arbitrarily deep nesting and binary-safe blob/verbatim/error strings (which may contain `\r`, `\n`, or bytes that look like other type sigils) decode correctly without special-casing.
+
 ```go
 import "github.com/0xRadioAc7iv/resp-codec/resp3"
 ```

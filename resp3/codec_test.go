@@ -637,6 +637,13 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
+	t.Run("blob string - missing CRLF after length returns error", func(t *testing.T) {
+		_, err := Decode([]byte("$3"))
+		if err == nil {
+			t.Error("expected error for missing CRLF after length, got nil")
+		}
+	})
+
 	t.Run("blob error - dispatches correctly", func(t *testing.T) {
 		got, err := Decode([]byte("!19\r\nERR unknown command\r\n"))
 		assertNoError(t, err)
@@ -850,6 +857,13 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
+	t.Run("null - missing CRLF returns error", func(t *testing.T) {
+		_, err := Decode([]byte("_"))
+		if err == nil {
+			t.Error("expected error for missing CRLF, got nil")
+		}
+	})
+
 	t.Run("boolean - true", func(t *testing.T) {
 		got, err := Decode([]byte("#t\r\n"))
 		assertNoError(t, err)
@@ -877,6 +891,13 @@ func TestDecode(t *testing.T) {
 		_, err := Decode([]byte("#tt\r\n"))
 		if err == nil {
 			t.Error("expected error for invalid boolean frame length, got nil")
+		}
+	})
+
+	t.Run("boolean - missing CRLF returns error", func(t *testing.T) {
+		_, err := Decode([]byte("#"))
+		if err == nil {
+			t.Error("expected error for missing CRLF, got nil")
 		}
 	})
 
@@ -1155,10 +1176,10 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
-	t.Run("array - nested map element with odd raw count returns error", func(t *testing.T) {
+	t.Run("array - nested map element with trailing extra data returns error", func(t *testing.T) {
 		_, err := Decode([]byte("*1\r\n%1\r\n+a\r\n:1\r\n:2\r\n"))
 		if err == nil {
-			t.Error("expected error for nested map odd raw count, got nil")
+			t.Error("expected error for trailing data after declared pair count, got nil")
 		}
 	})
 
@@ -1190,10 +1211,10 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
-	t.Run("array - nested attribute element with odd raw count returns error", func(t *testing.T) {
+	t.Run("array - nested attribute element with trailing extra data returns error", func(t *testing.T) {
 		_, err := Decode([]byte("*1\r\n|1\r\n+a\r\n:1\r\n:2\r\n"))
 		if err == nil {
-			t.Error("expected error for nested attribute odd raw count, got nil")
+			t.Error("expected error for trailing data after declared pair count, got nil")
 		}
 	})
 
@@ -1230,15 +1251,6 @@ func TestDecode(t *testing.T) {
 		assertDeepEqual(t, got, []any{AttributeType{respcodec.SimpleString("k"): 1}})
 	})
 
-	// NOTE: documents a known bug (tracked separately, not fixed here). Only the
-	// isMap branch in decodeArray was fixed to bound itemBytes to its own nested
-	// structure (payload[pos:lIdx]) before recursing, and to set pos = lIdx
-	// afterward. isArray, isSet, isAttribute, and isPush still pass the
-	// unbounded payload[pos:] and use pos = lIdx+1, so when one of these is
-	// followed by a trailing sibling element in the same outer array, the
-	// recursive decodeArray call greedily consumes the sibling's bytes too,
-	// and the outer loop's bookkeeping ends up misaligned. Currently returns
-	// an error instead of the value documented below.
 	t.Run("array - nested array followed by trailing sibling", func(t *testing.T) {
 		got, err := Decode([]byte("*2\r\n*2\r\n:1\r\n:2\r\n:5\r\n"))
 		assertNoError(t, err)
@@ -1263,7 +1275,6 @@ func TestDecode(t *testing.T) {
 		assertDeepEqual(t, got, []any{Push{Kind: respcodec.SimpleString("k")}, 5})
 	})
 
-	// isMap, by contrast, is fixed: this is the same shape of test and it passes.
 	t.Run("array - nested map followed by trailing sibling", func(t *testing.T) {
 		got, err := Decode([]byte("*2\r\n%1\r\n+k\r\n:1\r\n:5\r\n"))
 		assertNoError(t, err)
@@ -1305,6 +1316,13 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
+	t.Run("map - malformed value returns error", func(t *testing.T) {
+		_, err := Decode([]byte("%1\r\n+k\r\n?bad\r\n"))
+		if err == nil {
+			t.Error("expected error for malformed map value, got nil")
+		}
+	})
+
 	t.Run("map - truncated returns error", func(t *testing.T) {
 		_, err := Decode([]byte("%1\r\n"))
 		if err == nil {
@@ -1312,10 +1330,10 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
-	t.Run("map - odd raw element count returns error", func(t *testing.T) {
+	t.Run("map - trailing extra data returns error", func(t *testing.T) {
 		_, err := Decode([]byte("%1\r\n+a\r\n:1\r\n:2\r\n"))
 		if err == nil {
-			t.Error("expected error for odd raw element count, got nil")
+			t.Error("expected error for trailing data after declared pair count, got nil")
 		}
 	})
 
@@ -1377,10 +1395,17 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
-	t.Run("attribute - odd raw element count returns error", func(t *testing.T) {
+	t.Run("attribute - malformed value returns error", func(t *testing.T) {
+		_, err := Decode([]byte("|1\r\n+k\r\n?bad\r\n"))
+		if err == nil {
+			t.Error("expected error for malformed attribute value, got nil")
+		}
+	})
+
+	t.Run("attribute - trailing extra data returns error", func(t *testing.T) {
 		_, err := Decode([]byte("|1\r\n+a\r\n:1\r\n:2\r\n"))
 		if err == nil {
-			t.Error("expected error for odd raw element count, got nil")
+			t.Error("expected error for trailing data after declared pair count, got nil")
 		}
 	})
 
