@@ -353,3 +353,208 @@ func TestAppendVerbatimStringAppendsToExisting(t *testing.T) {
 		t.Errorf("expected %q, got %q", want, got)
 	}
 }
+
+// ---- DecodeLineFrame ----
+
+func ExampleDecodeLineFrame() {
+	payload, _ := DecodeLineFrame([]byte("+OK\r\n"), '+')
+	fmt.Printf("%q\n", payload)
+	_, err := DecodeLineFrame([]byte("+bad\rinput\r\n"), '+')
+	fmt.Println(err)
+
+	// Output:
+	// "OK"
+	// line frame payload must not contain CR or LF
+}
+
+func BenchmarkDecodeLineFrame(b *testing.B) {
+	buf := []byte("+OK\r\n")
+	for b.Loop() {
+		_, _ = DecodeLineFrame(buf, '+')
+	}
+}
+
+func TestDecodeLineFrame(t *testing.T) {
+	t.Run("valid simple string", func(t *testing.T) {
+		got, err := DecodeLineFrame([]byte("+OK\r\n"), '+')
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(got, []byte("OK")) {
+			t.Errorf("expected %q, got %q", "OK", got)
+		}
+	})
+
+	t.Run("valid empty payload", func(t *testing.T) {
+		got, err := DecodeLineFrame([]byte("+\r\n"), '+')
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(got, []byte("")) {
+			t.Errorf("expected empty payload, got %q", got)
+		}
+	})
+
+	t.Run("valid simple error", func(t *testing.T) {
+		got, err := DecodeLineFrame([]byte("-ERR oops\r\n"), '-')
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(got, []byte("ERR oops")) {
+			t.Errorf("expected %q, got %q", "ERR oops", got)
+		}
+	})
+
+	t.Run("too short returns error", func(t *testing.T) {
+		_, err := DecodeLineFrame([]byte("+\r"), '+')
+		if err == nil {
+			t.Error("expected error for too-short frame, got nil")
+		}
+	})
+
+	t.Run("empty buf returns error", func(t *testing.T) {
+		_, err := DecodeLineFrame([]byte{}, '+')
+		if err == nil {
+			t.Error("expected error for empty buf, got nil")
+		}
+	})
+
+	t.Run("wrong sigil returns error", func(t *testing.T) {
+		_, err := DecodeLineFrame([]byte("+OK\r\n"), '-')
+		if err == nil {
+			t.Error("expected error for wrong sigil, got nil")
+		}
+	})
+
+	t.Run("missing CRLF terminator returns error", func(t *testing.T) {
+		_, err := DecodeLineFrame([]byte("+OKxx"), '+')
+		if err == nil {
+			t.Error("expected error for missing CRLF terminator, got nil")
+		}
+	})
+
+	t.Run("payload containing CR returns error", func(t *testing.T) {
+		_, err := DecodeLineFrame([]byte("+a\rb\r\n"), '+')
+		if err == nil {
+			t.Error("expected error for CR in payload, got nil")
+		}
+	})
+
+	t.Run("payload containing LF returns error", func(t *testing.T) {
+		_, err := DecodeLineFrame([]byte("+a\nb\r\n"), '+')
+		if err == nil {
+			t.Error("expected error for LF in payload, got nil")
+		}
+	})
+}
+
+// ---- DecodeBlobFrame ----
+
+func ExampleDecodeBlobFrame() {
+	data, _ := DecodeBlobFrame([]byte("$5\r\nhello\r\n"), '$')
+	fmt.Println(data)
+	_, err := DecodeBlobFrame([]byte("$5\r\nhi\r\n"), '$')
+	fmt.Println(err)
+
+	// Output:
+	// hello
+	// blob frame length mismatch: declared 5, frame has 2 data bytes
+}
+
+func BenchmarkDecodeBlobFrame(b *testing.B) {
+	buf := []byte("$5\r\nhello\r\n")
+	for b.Loop() {
+		_, _ = DecodeBlobFrame(buf, '$')
+	}
+}
+
+func TestDecodeBlobFrame(t *testing.T) {
+	t.Run("valid blob string", func(t *testing.T) {
+		got, err := DecodeBlobFrame([]byte("$5\r\nhello\r\n"), '$')
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "hello" {
+			t.Errorf("expected %q, got %q", "hello", got)
+		}
+	})
+
+	t.Run("valid empty blob", func(t *testing.T) {
+		got, err := DecodeBlobFrame([]byte("$0\r\n\r\n"), '$')
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("valid blob error", func(t *testing.T) {
+		got, err := DecodeBlobFrame([]byte("!8\r\nERR oops\r\n"), '!')
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "ERR oops" {
+			t.Errorf("expected %q, got %q", "ERR oops", got)
+		}
+	})
+
+	t.Run("binary safe with embedded CRLF", func(t *testing.T) {
+		got, err := DecodeBlobFrame([]byte("$12\r\nhello\r\nworld\r\n"), '$')
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "hello\r\nworld" {
+			t.Errorf("expected %q, got %q", "hello\r\nworld", got)
+		}
+	})
+
+	t.Run("too short returns error", func(t *testing.T) {
+		_, err := DecodeBlobFrame([]byte("$1\r\n"), '$')
+		if err == nil {
+			t.Error("expected error for too-short frame, got nil")
+		}
+	})
+
+	t.Run("empty buf returns error", func(t *testing.T) {
+		_, err := DecodeBlobFrame([]byte{}, '$')
+		if err == nil {
+			t.Error("expected error for empty buf, got nil")
+		}
+	})
+
+	t.Run("wrong sigil returns error", func(t *testing.T) {
+		_, err := DecodeBlobFrame([]byte("$5\r\nhello\r\n"), '!')
+		if err == nil {
+			t.Error("expected error for wrong sigil, got nil")
+		}
+	})
+
+	t.Run("missing CRLF terminator returns error", func(t *testing.T) {
+		_, err := DecodeBlobFrame([]byte("$5\r\nhelloXX"), '$')
+		if err == nil {
+			t.Error("expected error for missing CRLF terminator, got nil")
+		}
+	})
+
+	t.Run("non-numeric length returns error", func(t *testing.T) {
+		_, err := DecodeBlobFrame([]byte("$x\r\nhello\r\n"), '$')
+		if err == nil {
+			t.Error("expected error for non-numeric length, got nil")
+		}
+	})
+
+	t.Run("negative length returns error", func(t *testing.T) {
+		_, err := DecodeBlobFrame([]byte("$-1\r\n\r\n"), '$')
+		if err == nil {
+			t.Error("expected error for negative length, got nil")
+		}
+	})
+
+	t.Run("length mismatch returns error", func(t *testing.T) {
+		_, err := DecodeBlobFrame([]byte("$5\r\nhi\r\n"), '$')
+		if err == nil {
+			t.Error("expected error for length mismatch, got nil")
+		}
+	})
+}

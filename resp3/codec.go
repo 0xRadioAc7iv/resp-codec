@@ -1,3 +1,24 @@
+// Package resp3 implements encoding and decoding for the RESP3 protocol
+// (https://github.com/redis/redis-specifications/blob/master/protocol/RESP3.md),
+// the superset of RESP2 used by Redis 6+ in protover 3 mode.
+//
+// Type mapping:
+//
+//	respcodec.SimpleString          ↔ +<value>\r\n
+//	string                          ↔ $<len>\r\n<data>\r\n   (blob string)
+//	error                           ↔ -<message>\r\n
+//	BlobError                       ↔ !<len>\r\n<data>\r\n
+//	VerbatimString                  ↔ =<len>\r\n<data>\r\n
+//	int                             ↔ :<value>\r\n
+//	*big.Int                        ↔ (<value>\r\n             (big number)
+//	float64 (and InfValue/NaNValue) ↔ ,<value>\r\n             (double)
+//	NullValue                       ↔ _\r\n
+//	bool                            ↔ #t\r\n / #f\r\n
+//	[]any                           ↔ *<len>\r\n<elements>...
+//	map[respcodec.SimpleString]any  ↔ %<pairs>\r\n<key><value>...
+//	map[any]struct{}                ↔ ~<len>\r\n<elements>...  (set)
+//	AttributeType                   ↔ |<pairs>\r\n<key><value>...
+//	Push                            ↔ ><len>\r\n<kind><args>...
 package resp3
 
 import (
@@ -30,7 +51,7 @@ func appendEncode(buf []byte, data any) ([]byte, error) {
 	case respcodec.SimpleString:
 		return wire.AppendSimpleString(buf, string(v))
 
-	// Verbatim String - same as Blog String
+	// Verbatim String - same as Blob String
 	case VerbatimString:
 		return wire.AppendVerbatimString(buf, string(v)), nil
 
@@ -199,7 +220,7 @@ func appendMapData(buf []byte, m map[respcodec.SimpleString]any, sigil byte) ([]
 // Decode parses a single complete RESP3 frame from buf and returns the decoded Go value.
 // The caller must supply exactly one complete frame with no trailing bytes.
 //
-// Implemented type mapping:
+// Type mapping:
 //
 //	`+` → respcodec.SimpleString
 //	`-` → error
@@ -211,8 +232,11 @@ func appendMapData(buf []byte, m map[respcodec.SimpleString]any, sigil byte) ([]
 //	`,` → float64
 //	`_` → NullValue
 //	`#` → bool
-//
-// Not yet implemented: * % ~ | >
+//	`*` → []any
+//	`%` → map[respcodec.SimpleString]any
+//	`~` → map[any]struct{}
+//	`|` → AttributeType
+//	`>` → Push
 func Decode(buf []byte) (any, error) {
 	if len(buf) == 0 {
 		return nil, fmt.Errorf("empty buffer")
@@ -280,26 +304,398 @@ func Decode(buf []byte) (any, error) {
 		}
 
 	case '*':
-		// TODO
-		return nil, nil
+		bufLen := len(buf)
+		if bufLen < 4 {
+			return []any{}, fmt.Errorf("buffer too short for array: need at least 4 bytes, got %d", bufLen)
+		}
+		arr, err := decodeArray(buf)
+		if err != nil {
+			return nil, err
+		}
+		return arr, nil
 
 	case '%':
-		// TODO
-		return nil, nil
+		bufLen := len(buf)
+		if bufLen < 4 {
+			return []any{}, fmt.Errorf("buffer too short for array: need at least 4 bytes, got %d", bufLen)
+		}
+		arr, err := decodeArray(buf)
+		if err != nil {
+			return nil, err
+		}
+		if len(arr)%2 == 1 {
+			return nil, fmt.Errorf("invalid map: expected an even number of elements, got %d", len(arr))
+		}
+		mapObject := make(map[respcodec.SimpleString]any, len(arr)/2)
+		for i := 0; i < len(arr)-1; {
+			ele, ok := arr[i].(respcodec.SimpleString)
+			if !ok {
+				return nil, fmt.Errorf("invalid map key at index %d: expected SimpleString, got %T", i, arr[i])
+			}
+			mapObject[ele] = arr[i+1]
+			i += 2
+		}
+		return mapObject, nil
 
 	case '~':
-		// TODO
-		return nil, nil
+		bufLen := len(buf)
+		if bufLen < 4 {
+			return []any{}, fmt.Errorf("buffer too short for array: need at least 4 bytes, got %d", bufLen)
+		}
+		arr, err := decodeArray(buf)
+		if err != nil {
+			return nil, err
+		}
+		set := make(map[any]struct{}, len(arr))
+		for _, v := range arr {
+			set[v] = struct{}{}
+		}
+		return set, nil
 
 	case '|':
-		// TODO
-		return nil, nil
+		bufLen := len(buf)
+		if bufLen < 4 {
+			return []any{}, fmt.Errorf("buffer too short for array: need at least 4 bytes, got %d", bufLen)
+		}
+		arr, err := decodeArray(buf)
+		if err != nil {
+			return nil, err
+		}
+		if len(arr)%2 == 1 {
+			return nil, fmt.Errorf("invalid attribute: expected an even number of elements, got %d", len(arr))
+		}
+		attributes := make(AttributeType, len(arr)/2)
+		for i := 0; i < len(arr)-1; {
+			ele, ok := arr[i].(respcodec.SimpleString)
+			if !ok {
+				return nil, fmt.Errorf("invalid attribute key at index %d: expected SimpleString, got %T", i, arr[i])
+			}
+			attributes[ele] = arr[i+1]
+			i += 2
+		}
+		return attributes, nil
 
 	case '>':
-		// TODO
-		return nil, nil
+		bufLen := len(buf)
+		if bufLen < 4 {
+			return []any{}, fmt.Errorf("buffer too short for array: need at least 4 bytes, got %d", bufLen)
+		}
+		arr, err := decodeArray(buf)
+		if err != nil {
+			return nil, err
+		}
+		if len(arr) == 0 {
+			return nil, fmt.Errorf("invalid push frame: expected at least one element for kind")
+		}
+		kind, ok := arr[0].(respcodec.SimpleString)
+		if !ok {
+			return nil, fmt.Errorf("invalid push kind: expected SimpleString, got %T", arr[0])
+		}
+		if len(arr) == 1 {
+			return Push{Kind: kind, Args: nil}, nil
+		}
+		return Push{Kind: kind, Args: arr[1:]}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown RESP3 type sigil: %q", buf[0])
 	}
+}
+
+// decodeArray parses a RESP3 array-like frame (*<count>\r\n<elements>...), recursing
+// into nested arrays, sets, and pushes. It is also used to decode the underlying
+// array structure of Map (%) and Attribute (|) frames, which the caller then
+// reinterprets as key/value pairs.
+func decodeArray(buf []byte) ([]any, error) {
+	size, numLength, err := getSizeAndNumberLength(buf[1:])
+	if err != nil {
+		return nil, err
+	}
+	if buf[numLength+1] != '\r' || buf[numLength+2] != '\n' {
+		return nil, fmt.Errorf("invalid array frame: missing CRLF after length: %q", buf)
+	}
+	if size == 0 {
+		return []any{}, nil
+	}
+
+	array := make([]any, 0)
+	payload := buf[numLength+3:]
+	maxIdx := len(buf) - numLength - 3
+	pos := 0
+
+	for pos < maxIdx {
+		fIdx := pos
+		lIdx := pos
+
+		// checks for whether the element of the array is of a particular type
+		IsaKindOfBlobString := payload[pos] == '=' || payload[pos] == '$' || payload[pos] == '!'
+		isArray := payload[pos] == '*'
+		isMap := payload[pos] == '%'
+		isSet := payload[pos] == '~'
+		isAttribute := payload[pos] == '|'
+		isPush := payload[pos] == '>'
+
+		if IsaKindOfBlobString {
+			blobStringSize, numLen, err := getSizeAndNumberLength(payload[pos+1:])
+			if err != nil {
+				return nil, err
+			}
+			itemBytes := payload[pos : pos+numLen+blobStringSize+5]
+			blobString, err := Decode(itemBytes)
+			if err != nil {
+				return nil, err
+			}
+			pos = pos + numLen + blobStringSize + 2
+			array = append(array, blobString)
+		} else if isArray {
+			arrayLen, headerNumLen, err := getSizeAndNumberLength(payload[pos+1:])
+			if err != nil {
+				return nil, err
+			}
+
+			// Skip past this array's own header line ("*<digits>\r\n") before
+			// counting data-terminating newlines: the header's own \n is not
+			// a data terminator.
+			lIdx = pos + 1 + headerNumLen + 2
+			needed := arrayLen
+			for lIdx < maxIdx && needed > 0 {
+				if payload[lIdx] == '\n' {
+					needed--
+				}
+				lIdx++
+			}
+
+			itemBytes := payload[pos:lIdx]
+			nestedArr, err := decodeArray(itemBytes)
+			if err != nil {
+				return nil, err
+			}
+			pos = lIdx
+			array = append(array, nestedArr)
+		} else if isMap {
+			pairCount, headerNumLen, err := getSizeAndNumberLength(payload[pos+1:])
+			if err != nil {
+				return nil, err
+			}
+
+			// Skip past this map's own header line ("%<digits>\r\n") before
+			// counting data-terminating newlines: the header's own \n is not
+			// a data terminator. Each declared pair is 2 raw values (key+value).
+			lIdx = pos + 1 + headerNumLen + 2
+			needed := pairCount * 2
+			for lIdx < maxIdx && needed > 0 {
+				if payload[lIdx] == '\n' {
+					needed--
+				}
+				lIdx++
+			}
+
+			itemBytes := payload[pos:lIdx]
+			arr, err := decodeArray(itemBytes)
+			if err != nil {
+				return nil, err
+			}
+
+			mapObject := make(map[respcodec.SimpleString]any, len(arr)/2)
+			for i := 0; i < len(arr)-1; i += 2 {
+				ele, ok := arr[i].(respcodec.SimpleString)
+				if !ok {
+					return nil, fmt.Errorf("invalid map key at index %d: expected SimpleString, got %T", i, arr[i])
+				}
+				mapObject[ele] = arr[i+1]
+			}
+			if len(arr)/2 != len(mapObject) {
+				return nil, fmt.Errorf("array element count mismatch: declared %d, got %d", len(arr)/2, len(mapObject))
+			}
+			pos = lIdx
+			array = append(array, mapObject)
+		} else if isSet {
+			arrayLen, headerNumLen, err := getSizeAndNumberLength(payload[pos+1:])
+			if err != nil {
+				return nil, err
+			}
+
+			// Skip past this set's own header line ("~<digits>\r\n") before
+			// counting data-terminating newlines: the header's own \n is not
+			// a data terminator.
+			lIdx = pos + 1 + headerNumLen + 2
+			needed := arrayLen
+			for lIdx < maxIdx && needed > 0 {
+				if payload[lIdx] == '\n' {
+					needed--
+				}
+				lIdx++
+			}
+
+			itemBytes := payload[pos:lIdx]
+			nestedArr, err := decodeArray(itemBytes)
+			if err != nil {
+				return nil, err
+			}
+			set := make(map[any]struct{}, len(nestedArr))
+			for _, v := range nestedArr {
+				set[v] = struct{}{}
+			}
+			pos = lIdx
+			array = append(array, set)
+		} else if isAttribute {
+			pairCount, headerNumLen, err := getSizeAndNumberLength(payload[pos+1:])
+			if err != nil {
+				return nil, err
+			}
+
+			// Skip past this attribute's own header line ("|<digits>\r\n")
+			// before counting data-terminating newlines: the header's own \n
+			// is not a data terminator. Each declared pair is 2 raw values
+			// (key+value).
+			lIdx = pos + 1 + headerNumLen + 2
+			needed := pairCount * 2
+			for lIdx < maxIdx && needed > 0 {
+				if payload[lIdx] == '\n' {
+					needed--
+				}
+				lIdx++
+			}
+
+			itemBytes := payload[pos:lIdx]
+			arr, err := decodeArray(itemBytes)
+			if err != nil {
+				return nil, err
+			}
+
+			attributes := make(AttributeType, len(arr)/2)
+			for i := 0; i < len(arr)-1; i += 2 {
+				ele, ok := arr[i].(respcodec.SimpleString)
+				if !ok {
+					return nil, fmt.Errorf("invalid attribute key at index %d: expected SimpleString, got %T", i, arr[i])
+				}
+				attributes[ele] = arr[i+1]
+			}
+			if len(arr)/2 != len(attributes) {
+				return nil, fmt.Errorf("array element count mismatch: declared %d, got %d", len(arr)/2, len(attributes))
+			}
+			pos = lIdx
+			array = append(array, attributes)
+		} else if isPush {
+			arrayLen, headerNumLen, err := getSizeAndNumberLength(payload[pos+1:])
+			if err != nil {
+				return nil, err
+			}
+			size := arrayLen
+
+			// Skip past this push's own header line (">digits\r\n") before
+			// counting data-terminating newlines: the header's own \n is not
+			// a data terminator.
+			lIdx = pos + 1 + headerNumLen + 2
+			needed := arrayLen
+			for lIdx < maxIdx && needed > 0 {
+				if payload[lIdx] == '\n' {
+					needed--
+				}
+				lIdx++
+			}
+
+			itemBytes := payload[pos:lIdx]
+			nestedArr, err := decodeArray(itemBytes)
+			if err != nil {
+				return nil, err
+			}
+			if len(nestedArr) == 0 {
+				return nil, fmt.Errorf("invalid push frame: expected at least one element for kind")
+			}
+			if len(nestedArr) != size {
+				return []any{}, fmt.Errorf("array element count mismatch: declared %d, got %d", size, len(nestedArr))
+			}
+			kind, ok := nestedArr[0].(respcodec.SimpleString)
+			if !ok {
+				return nil, fmt.Errorf("invalid push kind: expected SimpleString, got %T", nestedArr[0])
+			}
+			pos = lIdx
+			if len(nestedArr) == 1 {
+				array = append(array, Push{Kind: kind, Args: nil})
+				continue
+			}
+			array = append(array, Push{Kind: kind, Args: nestedArr[1:]})
+		} else {
+			for lIdx < maxIdx {
+				if payload[lIdx] == '\n' {
+					lIdx++
+					break
+				}
+				lIdx++
+			}
+
+			switch payload[pos] {
+			case '+':
+				s, _ := Decode(payload[fIdx:lIdx])
+				array = append(array, s)
+			case '-':
+				sErr, err := Decode(payload[fIdx:lIdx])
+				if err != nil {
+					return nil, err
+				}
+				array = append(array, sErr)
+			case ':':
+				integer, err := Decode(payload[fIdx:lIdx])
+				if err != nil {
+					return nil, err
+				}
+				array = append(array, integer)
+			case '(':
+				bigNum, err := Decode(payload[fIdx:lIdx])
+				if err != nil {
+					return nil, err
+				}
+				array = append(array, bigNum)
+			case ',':
+				double, err := Decode(payload[fIdx:lIdx])
+				if err != nil {
+					return nil, err
+				}
+				array = append(array, double)
+			case '_':
+				null, err := Decode(payload[fIdx:lIdx])
+				if err != nil {
+					return nil, err
+				}
+				array = append(array, null)
+			case '#':
+				boolean, err := Decode(payload[fIdx:lIdx])
+				if err != nil {
+					return nil, err
+				}
+				array = append(array, boolean)
+			}
+			pos = lIdx
+		}
+	}
+
+	switch buf[0] {
+	case '*', '~':
+		// fmt.Println("buf", string(buf), "array len", len(array), "size", size, "array", array)
+		if len(array) != size {
+			return nil, fmt.Errorf("array element count mismatch: declared %d, got %d", size, len(array))
+		}
+	case '%', '|':
+		if len(array)/2 != size {
+			return nil, fmt.Errorf("array element count mismatch: declared %d, got %d", size, len(array))
+		}
+	}
+	return array, nil
+}
+
+func getSizeAndNumberLength(buf []byte) (size, numLength int, err error) {
+	for _, v := range buf {
+		if v == '\r' {
+			break
+		}
+		if v < '0' || v > '9' {
+			return 0, 0, fmt.Errorf("invalid character in bulk string length: %q", v)
+		}
+		size = (size * 10) + int(v-'0')
+		numLength++
+	}
+	if numLength == 0 {
+		return 0, 0, fmt.Errorf("invalid frame: missing length digits before CRLF")
+	}
+	return size, numLength, nil
 }

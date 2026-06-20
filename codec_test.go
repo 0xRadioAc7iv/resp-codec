@@ -405,6 +405,13 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
+	t.Run("error - invalid frame returns error", func(t *testing.T) {
+		_, err := Decode([]byte("-bad\rinput\r\n"))
+		if err == nil {
+			t.Error("expected error for CR in error payload, got nil")
+		}
+	})
+
 	t.Run("integer - dispatches correctly", func(t *testing.T) {
 		got, err := Decode([]byte(":42\r\n"))
 		assertNoError(t, err)

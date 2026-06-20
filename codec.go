@@ -246,7 +246,7 @@ func decodeNullBulkString(buf []byte) error {
 func decodeArray(buf []byte) ([]any, error) {
 	bufLen := len(buf)
 	if bufLen < 4 {
-		return []any{}, fmt.Errorf("buffer too short for array: need at least 5 bytes, got %d", bufLen)
+		return []any{}, fmt.Errorf("buffer too short for array: need at least 4 bytes, got %d", bufLen)
 	}
 	if buf[0] != '*' {
 		return []any{}, fmt.Errorf("invalid type prefix for array: expected '*', got %q", buf[0])

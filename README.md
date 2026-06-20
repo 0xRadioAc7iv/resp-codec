@@ -63,6 +63,37 @@ nullArr, err := respcodec.Decode([]byte("*-1\r\n"))                      // nil
 
 For the `-` (error) type, `Decode` returns an `error` value, not a plain string.
 
+## RESP3
+
+The `resp3` subpackage implements [RESP3](https://github.com/redis/redis-specifications/blob/master/protocol/RESP3.md), the protocol used by Redis 6+ in protover 3 mode. It adds new types on top of RESP2 (big numbers, doubles, booleans, blob errors, verbatim strings, maps, sets, attributes, and push messages) and reinterprets RESP2's null as a single unified null type.
+
+```go
+import "github.com/0xRadioAc7iv/resp-codec/resp3"
+```
+
+| Go type                              | RESP3 type    | Wire format                    |
+| ------------------------------------ | ------------- | ------------------------------- |
+| `respcodec.SimpleString`             | Simple string | `+<value>\r\n`                  |
+| `string`                             | Blob string   | `$<len>\r\n<data>\r\n`          |
+| `error`                              | Simple error  | `-<message>\r\n`                |
+| `resp3.BlobError`                    | Blob error    | `!<len>\r\n<data>\r\n`          |
+| `resp3.VerbatimString`               | Verbatim string | `=<len>\r\n<data>\r\n`        |
+| `int`                                | Integer       | `:<value>\r\n`                  |
+| `*big.Int`                           | Big number    | `(<value>\r\n`                  |
+| `float64` / `resp3.Inf` / `resp3.NaN`| Double        | `,<value>\r\n`                  |
+| `resp3.Null`                         | Null          | `_\r\n`                         |
+| `bool`                               | Boolean       | `#t\r\n` / `#f\r\n`             |
+| `[]any`                              | Array         | `*<len>\r\n<elements>`          |
+| `map[respcodec.SimpleString]any`     | Map           | `%<pairs>\r\n<key><value>...`   |
+| `map[any]struct{}`                   | Set           | `~<len>\r\n<elements>`          |
+| `resp3.AttributeType`                | Attribute     | `\|<pairs>\r\n<key><value>...`  |
+| `resp3.Push`                         | Push          | `><len>\r\n<kind><args>...`     |
+
+```go
+buf, err := resp3.Encode([]any{"GET", "key"})                         // "*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n"
+v,   err := resp3.Decode([]byte("*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n"))   // []any{"GET", "key"}
+```
+
 ## Testing
 
 Run the test suite:

@@ -97,9 +97,6 @@ func DecodeBlobFrame(buf []byte, sigil byte) (string, error) {
 		return "", fmt.Errorf("blob frame missing CRLF terminator")
 	}
 	p := bytes.IndexByte(buf[1:], '\r')
-	if p < 0 {
-		return "", fmt.Errorf("blob frame missing CRLF after length")
-	}
 	length, err := strconv.Atoi(string(buf[1 : p+1]))
 	if err != nil || length < 0 {
 		return "", fmt.Errorf("invalid blob frame length: %q", buf[1:p+1])

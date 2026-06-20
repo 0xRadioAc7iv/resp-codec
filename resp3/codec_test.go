@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"reflect"
 	"testing"
 
 	respcodec "github.com/0xRadioAc7iv/resp-codec"
@@ -418,6 +419,28 @@ func TestEncode(t *testing.T) {
 		assertBytes(t, result, prefix)
 	})
 
+	t.Run("push - invalid kind rolls back", func(t *testing.T) {
+		prefix := []byte("+OK\r\n")
+		buf := make([]byte, len(prefix), 64)
+		copy(buf, prefix)
+		result, err := AppendEncode(buf, Push{Kind: respcodec.SimpleString("bad\r\nkind")})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		assertBytes(t, result, prefix)
+	})
+
+	t.Run("map - invalid key rolls back", func(t *testing.T) {
+		prefix := []byte("+OK\r\n")
+		buf := make([]byte, len(prefix), 64)
+		copy(buf, prefix)
+		result, err := AppendEncode(buf, map[respcodec.SimpleString]any{respcodec.SimpleString("bad\r\nkey"): 1})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		assertBytes(t, result, prefix)
+	})
+
 	t.Run("unsupported type returns nil and error", func(t *testing.T) {
 		got, err := Encode(uint(42))
 		if got != nil {
@@ -523,6 +546,46 @@ func ExampleDecode() {
 	// unknown RESP3 type sigil: '?'
 }
 
+func ExampleDecode_array() {
+	v, _ := Decode([]byte("*2\r\n:1\r\n:2\r\n"))
+	fmt.Println(v)
+
+	// Output:
+	// [1 2]
+}
+
+func ExampleDecode_map() {
+	v, _ := Decode([]byte("%1\r\n+key\r\n:42\r\n"))
+	fmt.Println(v)
+
+	// Output:
+	// map[key:42]
+}
+
+func ExampleDecode_set() {
+	v, _ := Decode([]byte("~1\r\n:42\r\n"))
+	fmt.Println(v)
+
+	// Output:
+	// map[42:{}]
+}
+
+func ExampleDecode_attribute() {
+	v, _ := Decode([]byte("|1\r\n+ttl\r\n:100\r\n"))
+	fmt.Println(v)
+
+	// Output:
+	// map[ttl:100]
+}
+
+func ExampleDecode_push() {
+	v, _ := Decode([]byte(">3\r\n+message\r\n+ch\r\n$5\r\nhello\r\n"))
+	fmt.Println(v)
+
+	// Output:
+	// {message [ch hello]}
+}
+
 func TestDecode(t *testing.T) {
 	t.Run("simple string - dispatches correctly", func(t *testing.T) {
 		got, err := Decode([]byte("+OK\r\n"))
@@ -590,11 +653,25 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
+	t.Run("blob error - invalid frame returns error", func(t *testing.T) {
+		_, err := Decode([]byte("!5\r\nhi\r\n"))
+		if err == nil {
+			t.Error("expected error for blob error length mismatch, got nil")
+		}
+	})
+
 	t.Run("verbatim string - dispatches correctly", func(t *testing.T) {
 		got, err := Decode([]byte("=9\r\ntxt:hello\r\n"))
 		assertNoError(t, err)
 		if got != VerbatimString("txt:hello") {
 			t.Errorf("expected VerbatimString(\"txt:hello\"), got %v", got)
+		}
+	})
+
+	t.Run("verbatim string - invalid frame returns error", func(t *testing.T) {
+		_, err := Decode([]byte("=5\r\nhi\r\n"))
+		if err == nil {
+			t.Error("expected error for verbatim string length mismatch, got nil")
 		}
 	})
 
@@ -796,6 +873,13 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
+	t.Run("boolean - invalid frame length returns error", func(t *testing.T) {
+		_, err := Decode([]byte("#tt\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid boolean frame length, got nil")
+		}
+	})
+
 	t.Run("unknown sigil returns error", func(t *testing.T) {
 		_, err := Decode([]byte("?unknown\r\n"))
 		if err == nil {
@@ -807,6 +891,553 @@ func TestDecode(t *testing.T) {
 		_, err := Decode([]byte{})
 		if err == nil {
 			t.Error("expected error for empty buffer, got nil")
+		}
+	})
+
+	t.Run("array - empty", func(t *testing.T) {
+		got, err := Decode([]byte("*0\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{})
+	})
+
+	t.Run("array - single element", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n:42\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{42})
+	})
+
+	t.Run("array - mixed types", func(t *testing.T) {
+		got, err := Decode([]byte("*3\r\n:1\r\n$5\r\nhello\r\n#t\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{1, "hello", true})
+	})
+
+	t.Run("array - nested", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n*2\r\n:1\r\n:2\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{[]any{1, 2}})
+	})
+
+	t.Run("array - truncated returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n"))
+		if err == nil {
+			t.Error("expected error for truncated array, got nil")
+		}
+	})
+
+	t.Run("array - invalid element returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n?bad\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid element sigil, got nil")
+		}
+	})
+
+	t.Run("array - too short returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*"))
+		if err == nil {
+			t.Error("expected error for too-short array buffer, got nil")
+		}
+	})
+
+	t.Run("array - non-numeric count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*x\r\n"))
+		if err == nil {
+			t.Error("expected error for non-numeric count, got nil")
+		}
+	})
+
+	t.Run("array - missing LF after CR in count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\rX"))
+		if err == nil {
+			t.Error("expected error for missing LF after CR, got nil")
+		}
+	})
+
+	t.Run("array - missing length digits returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*\r\nX"))
+		if err == nil {
+			t.Error("expected error for missing length digits, got nil")
+		}
+	})
+
+	t.Run("array - blob string element with non-numeric length returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n$x\r\nhello\r\n"))
+		if err == nil {
+			t.Error("expected error for blob string element with non-numeric length, got nil")
+		}
+	})
+
+	t.Run("array - invalid blob string element returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n$3\r\nabcd\r\n"))
+		if err == nil {
+			t.Error("expected error for malformed blob string element, got nil")
+		}
+	})
+
+	t.Run("array - valid error element", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n-ERR oops\r\n"))
+		assertNoError(t, err)
+		arr, ok := got.([]any)
+		if !ok || len(arr) != 1 {
+			t.Fatalf("expected single-element []any, got %#v", got)
+		}
+		e, ok := arr[0].(error)
+		if !ok || e.Error() != "ERR oops" {
+			t.Errorf("expected error \"ERR oops\", got %#v", arr[0])
+		}
+	})
+
+	t.Run("array - valid big number element", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n(123\r\n"))
+		assertNoError(t, err)
+		arr, ok := got.([]any)
+		if !ok || len(arr) != 1 {
+			t.Fatalf("expected single-element []any, got %#v", got)
+		}
+		n, ok := arr[0].(*big.Int)
+		if !ok || n.String() != "123" {
+			t.Errorf("expected big.Int 123, got %#v", arr[0])
+		}
+	})
+
+	t.Run("array - valid double element", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n,3.14\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{3.14})
+	})
+
+	t.Run("array - valid null element", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n_\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{Null})
+	})
+
+	t.Run("array - nested array with non-numeric count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n*x\r\n"))
+		if err == nil {
+			t.Error("expected error for nested array non-numeric count, got nil")
+		}
+	})
+
+	t.Run("array - nested array element count mismatch returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n*3\r\n:1\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for nested array element count mismatch, got nil")
+		}
+	})
+
+	t.Run("array - invalid integer element returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n:bad\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid integer element, got nil")
+		}
+	})
+
+	t.Run("array - invalid big number element returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n(bad\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid big number element, got nil")
+		}
+	})
+
+	t.Run("array - invalid double element returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n,bad\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid double element, got nil")
+		}
+	})
+
+	t.Run("array - invalid boolean element returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n#bad\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid boolean element, got nil")
+		}
+	})
+
+	t.Run("array - invalid null element returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n_bad\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid null element, got nil")
+		}
+	})
+
+	t.Run("array - invalid error element returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*2\r\n:1\r\n-bad\rerr\r\n"))
+		if err == nil {
+			t.Error("expected error for invalid error element, got nil")
+		}
+	})
+
+	t.Run("array - multi-digit count", func(t *testing.T) {
+		got, err := Decode([]byte("*10\r\n:0\r\n:1\r\n:2\r\n:3\r\n:4\r\n:5\r\n:6\r\n:7\r\n:8\r\n:9\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
+	})
+
+	t.Run("array - nested set element", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n~2\r\n:1\r\n:2\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{map[any]struct{}{1: {}, 2: {}}})
+	})
+
+	t.Run("array - nested set element with non-numeric count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n~x\r\n"))
+		if err == nil {
+			t.Error("expected error for nested set non-numeric count, got nil")
+		}
+	})
+
+	t.Run("array - nested set element with malformed item returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n~1\r\n?bad\r\n"))
+		if err == nil {
+			t.Error("expected error for nested set malformed item, got nil")
+		}
+	})
+
+	t.Run("array - nested push element", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n>1\r\n+k\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{Push{Kind: respcodec.SimpleString("k")}})
+	})
+
+	t.Run("array - nested push element with args", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n>2\r\n+k\r\n:1\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{Push{Kind: respcodec.SimpleString("k"), Args: []any{1}}})
+	})
+
+	t.Run("array - nested push element with non-numeric count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n>x\r\n"))
+		if err == nil {
+			t.Error("expected error for nested push non-numeric count, got nil")
+		}
+	})
+
+	t.Run("array - nested push element with malformed kind frame returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n>1\r\n$x\r\n"))
+		if err == nil {
+			t.Error("expected error for nested push malformed kind frame, got nil")
+		}
+	})
+
+	t.Run("array - nested push element count mismatch returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n>2\r\n+k\r\n"))
+		if err == nil {
+			t.Error("expected error for nested push element count mismatch, got nil")
+		}
+	})
+
+	t.Run("array - nested push element with malformed kind returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n>1\r\n?bad\r\n"))
+		if err == nil {
+			t.Error("expected error for nested push malformed kind, got nil")
+		}
+	})
+
+	t.Run("array - nested push element with no kind returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n>0\r\n"))
+		if err == nil {
+			t.Error("expected error for nested push with no kind, got nil")
+		}
+	})
+
+	t.Run("array - nested push element with non-SimpleString kind returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n>1\r\n:1\r\n"))
+		if err == nil {
+			t.Error("expected error for nested push non-SimpleString kind, got nil")
+		}
+	})
+
+	t.Run("array - nested map element with non-SimpleString key returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n%1\r\n:1\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for nested map non-SimpleString key, got nil")
+		}
+	})
+
+	t.Run("array - nested map element with odd raw count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n%1\r\n+a\r\n:1\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for nested map odd raw count, got nil")
+		}
+	})
+
+	t.Run("array - nested map element with malformed item returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n%1\r\n?bad\r\n:1\r\n"))
+		if err == nil {
+			t.Error("expected error for nested map malformed item, got nil")
+		}
+	})
+
+	t.Run("array - nested map element with non-numeric pair count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n%x\r\n"))
+		if err == nil {
+			t.Error("expected error for nested map non-numeric pair count, got nil")
+		}
+	})
+
+	t.Run("array - nested map element with duplicate key returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n%2\r\n+k\r\n:1\r\n+k\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for nested map duplicate key, got nil")
+		}
+	})
+
+	t.Run("array - nested attribute element with non-SimpleString key returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n|1\r\n:1\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for nested attribute non-SimpleString key, got nil")
+		}
+	})
+
+	t.Run("array - nested attribute element with odd raw count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n|1\r\n+a\r\n:1\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for nested attribute odd raw count, got nil")
+		}
+	})
+
+	t.Run("array - nested attribute element with malformed item returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n|1\r\n?bad\r\n:1\r\n"))
+		if err == nil {
+			t.Error("expected error for nested attribute malformed item, got nil")
+		}
+	})
+
+	t.Run("array - nested attribute element with non-numeric pair count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n|x\r\n"))
+		if err == nil {
+			t.Error("expected error for nested attribute non-numeric pair count, got nil")
+		}
+	})
+
+	t.Run("array - nested attribute element with duplicate key returns error", func(t *testing.T) {
+		_, err := Decode([]byte("*1\r\n|2\r\n+k\r\n:1\r\n+k\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for nested attribute duplicate key, got nil")
+		}
+	})
+
+	t.Run("array - nested map element", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n%1\r\n+k\r\n:1\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{map[respcodec.SimpleString]any{respcodec.SimpleString("k"): 1}})
+	})
+
+	t.Run("array - nested attribute element", func(t *testing.T) {
+		got, err := Decode([]byte("*1\r\n|1\r\n+k\r\n:1\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{AttributeType{respcodec.SimpleString("k"): 1}})
+	})
+
+	// NOTE: documents a known bug (tracked separately, not fixed here). Only the
+	// isMap branch in decodeArray was fixed to bound itemBytes to its own nested
+	// structure (payload[pos:lIdx]) before recursing, and to set pos = lIdx
+	// afterward. isArray, isSet, isAttribute, and isPush still pass the
+	// unbounded payload[pos:] and use pos = lIdx+1, so when one of these is
+	// followed by a trailing sibling element in the same outer array, the
+	// recursive decodeArray call greedily consumes the sibling's bytes too,
+	// and the outer loop's bookkeeping ends up misaligned. Currently returns
+	// an error instead of the value documented below.
+	t.Run("array - nested array followed by trailing sibling", func(t *testing.T) {
+		got, err := Decode([]byte("*2\r\n*2\r\n:1\r\n:2\r\n:5\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{[]any{1, 2}, 5})
+	})
+
+	t.Run("array - nested set followed by trailing sibling", func(t *testing.T) {
+		got, err := Decode([]byte("*2\r\n~2\r\n:1\r\n:2\r\n:5\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{map[any]struct{}{1: {}, 2: {}}, 5})
+	})
+
+	t.Run("array - nested attribute followed by trailing sibling", func(t *testing.T) {
+		got, err := Decode([]byte("*2\r\n|1\r\n+k\r\n:1\r\n:5\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{AttributeType{respcodec.SimpleString("k"): 1}, 5})
+	})
+
+	t.Run("array - nested push followed by trailing sibling", func(t *testing.T) {
+		got, err := Decode([]byte("*2\r\n>1\r\n+k\r\n:5\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{Push{Kind: respcodec.SimpleString("k")}, 5})
+	})
+
+	// isMap, by contrast, is fixed: this is the same shape of test and it passes.
+	t.Run("array - nested map followed by trailing sibling", func(t *testing.T) {
+		got, err := Decode([]byte("*2\r\n%1\r\n+k\r\n:1\r\n:5\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, []any{map[respcodec.SimpleString]any{respcodec.SimpleString("k"): 1}, 5})
+	})
+
+	t.Run("map - too short returns error", func(t *testing.T) {
+		_, err := Decode([]byte("%"))
+		if err == nil {
+			t.Error("expected error for too-short map buffer, got nil")
+		}
+	})
+
+	t.Run("map - empty", func(t *testing.T) {
+		got, err := Decode([]byte("%0\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, map[respcodec.SimpleString]any{})
+	})
+
+	t.Run("map - single pair", func(t *testing.T) {
+		got, err := Decode([]byte("%1\r\n+key\r\n:42\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, map[respcodec.SimpleString]any{respcodec.SimpleString("key"): 42})
+	})
+
+	t.Run("map - multiple pairs", func(t *testing.T) {
+		got, err := Decode([]byte("%2\r\n+a\r\n:1\r\n+b\r\n:2\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, map[respcodec.SimpleString]any{
+			respcodec.SimpleString("a"): 1,
+			respcodec.SimpleString("b"): 2,
+		})
+	})
+
+	t.Run("map - non-SimpleString key returns error", func(t *testing.T) {
+		_, err := Decode([]byte("%1\r\n:1\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for non-SimpleString map key, got nil")
+		}
+	})
+
+	t.Run("map - truncated returns error", func(t *testing.T) {
+		_, err := Decode([]byte("%1\r\n"))
+		if err == nil {
+			t.Error("expected error for truncated map, got nil")
+		}
+	})
+
+	t.Run("map - odd raw element count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("%1\r\n+a\r\n:1\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for odd raw element count, got nil")
+		}
+	})
+
+	t.Run("set - too short returns error", func(t *testing.T) {
+		_, err := Decode([]byte("~"))
+		if err == nil {
+			t.Error("expected error for too-short set buffer, got nil")
+		}
+	})
+
+	t.Run("set - empty", func(t *testing.T) {
+		got, err := Decode([]byte("~0\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, map[any]struct{}{})
+	})
+
+	t.Run("set - single element", func(t *testing.T) {
+		got, err := Decode([]byte("~1\r\n:42\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, map[any]struct{}{42: {}})
+	})
+
+	t.Run("set - multiple elements", func(t *testing.T) {
+		got, err := Decode([]byte("~2\r\n:1\r\n:2\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, map[any]struct{}{1: {}, 2: {}})
+	})
+
+	t.Run("set - malformed element returns error", func(t *testing.T) {
+		_, err := Decode([]byte("~1\r\n?bad\r\n"))
+		if err == nil {
+			t.Error("expected error for malformed set element, got nil")
+		}
+	})
+
+	t.Run("attribute - too short returns error", func(t *testing.T) {
+		_, err := Decode([]byte("|"))
+		if err == nil {
+			t.Error("expected error for too-short attribute buffer, got nil")
+		}
+	})
+
+	t.Run("attribute - empty", func(t *testing.T) {
+		got, err := Decode([]byte("|0\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, AttributeType{})
+	})
+
+	t.Run("attribute - single pair", func(t *testing.T) {
+		got, err := Decode([]byte("|1\r\n+ttl\r\n:100\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, AttributeType{respcodec.SimpleString("ttl"): 100})
+	})
+
+	t.Run("attribute - non-SimpleString key returns error", func(t *testing.T) {
+		_, err := Decode([]byte("|1\r\n:1\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for non-SimpleString attribute key, got nil")
+		}
+	})
+
+	t.Run("attribute - odd raw element count returns error", func(t *testing.T) {
+		_, err := Decode([]byte("|1\r\n+a\r\n:1\r\n:2\r\n"))
+		if err == nil {
+			t.Error("expected error for odd raw element count, got nil")
+		}
+	})
+
+	t.Run("attribute - malformed leading element returns error", func(t *testing.T) {
+		_, err := Decode([]byte("|1\r\n?bad\r\n:1\r\n"))
+		if err == nil {
+			t.Error("expected error for malformed attribute element, got nil")
+		}
+	})
+
+	t.Run("push - too short returns error", func(t *testing.T) {
+		_, err := Decode([]byte(">"))
+		if err == nil {
+			t.Error("expected error for too-short push buffer, got nil")
+		}
+	})
+
+	t.Run("push - non-numeric count returns error", func(t *testing.T) {
+		_, err := Decode([]byte(">x\r\n"))
+		if err == nil {
+			t.Error("expected error for non-numeric push count, got nil")
+		}
+	})
+
+	t.Run("push - no args", func(t *testing.T) {
+		got, err := Decode([]byte(">1\r\n+subscribe\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, Push{Kind: respcodec.SimpleString("subscribe")})
+	})
+
+	t.Run("push - with args", func(t *testing.T) {
+		got, err := Decode([]byte(">3\r\n+message\r\n+ch\r\n$7\r\npayload\r\n"))
+		assertNoError(t, err)
+		assertDeepEqual(t, got, Push{
+			Kind: respcodec.SimpleString("message"),
+			Args: []any{respcodec.SimpleString("ch"), "payload"},
+		})
+	})
+
+	t.Run("push - non-SimpleString kind returns error", func(t *testing.T) {
+		_, err := Decode([]byte(">1\r\n:1\r\n"))
+		if err == nil {
+			t.Error("expected error for non-SimpleString push kind, got nil")
+		}
+	})
+
+	t.Run("push - malformed kind element returns error", func(t *testing.T) {
+		_, err := Decode([]byte(">1\r\n?bad\r\n"))
+		if err == nil {
+			t.Error("expected error for malformed push kind element, got nil")
+		}
+	})
+
+	t.Run("push - empty returns error", func(t *testing.T) {
+		_, err := Decode([]byte(">0\r\n"))
+		if err == nil {
+			t.Error("expected error for push with no kind, got nil")
 		}
 	})
 }
@@ -827,6 +1458,11 @@ func BenchmarkDecode(b *testing.B) {
 		{"null", []byte("_\r\n")},
 		{"boolean true", []byte("#t\r\n")},
 		{"boolean false", []byte("#f\r\n")},
+		{"array 3 elements", []byte("*3\r\n:1\r\n$5\r\nhello\r\n#t\r\n")},
+		{"map 1 pair", []byte("%1\r\n+key\r\n:42\r\n")},
+		{"set 1 element", []byte("~1\r\n:42\r\n")},
+		{"attribute 1 pair", []byte("|1\r\n+ttl\r\n:100\r\n")},
+		{"push 2 args", []byte(">3\r\n+message\r\n+ch\r\n$5\r\nhello\r\n")},
 	}
 
 	for _, c := range cases {
@@ -834,6 +1470,35 @@ func BenchmarkDecode(b *testing.B) {
 			for b.Loop() {
 				_, _ = Decode(c.input)
 			}
+		})
+	}
+}
+
+func TestRoundTrip(t *testing.T) {
+	cases := []struct {
+		name  string
+		input any
+	}{
+		{"simple string", respcodec.SimpleString("OK")},
+		{"integer", 42},
+		{"blob string", "hello"},
+		{"double", 3.14},
+		{"null", Null},
+		{"boolean", true},
+		{"array", []any{1, "hello", true}},
+		{"map", map[respcodec.SimpleString]any{respcodec.SimpleString("key"): 42}},
+		{"set", map[any]struct{}{42: {}}},
+		{"attribute", AttributeType{respcodec.SimpleString("ttl"): 100}},
+		{"push", Push{Kind: respcodec.SimpleString("message"), Args: []any{respcodec.SimpleString("ch"), "hello"}}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			buf, err := Encode(c.input)
+			assertNoError(t, err)
+			got, err := Decode(buf)
+			assertNoError(t, err)
+			assertDeepEqual(t, got, c.input)
 		})
 	}
 }
@@ -849,5 +1514,12 @@ func assertBytes(t testing.TB, got, want []byte) {
 	t.Helper()
 	if !bytes.Equal(got, want) {
 		t.Errorf("expected %q, got %q", want, got)
+	}
+}
+
+func assertDeepEqual(t testing.TB, got, want any) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("expected %#v, got %#v", want, got)
 	}
 }
