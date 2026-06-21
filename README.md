@@ -1,6 +1,6 @@
 # resp-codec
 
-A Go library for encoding and decoding the [Redis Serialization Protocol (RESP2)](https://redis.io/docs/latest/develop/reference/protocol-spec/).
+A Go library for encoding and decoding the Redis Serialization Protocol — [RESP2](https://redis.io/docs/latest/develop/reference/protocol-spec/) in the root package, and [RESP3](https://github.com/redis/redis-specifications/blob/master/protocol/RESP3.md) in the `resp3` subpackage.
 
 [![CI](https://github.com/0xRadioAc7iv/resp-codec/actions/workflows/ci.yml/badge.svg)](https://github.com/0xRadioAc7iv/resp-codec/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/0xRadioAc7iv/resp-codec/v2.svg)](https://pkg.go.dev/github.com/0xRadioAc7iv/resp-codec/v2)
