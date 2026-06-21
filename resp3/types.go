@@ -1,6 +1,6 @@
 package resp3
 
-import respcodec "github.com/0xRadioAc7iv/resp-codec"
+import respcodec "github.com/0xRadioAc7iv/resp-codec/v2"
 
 // NullValue is the backing type for the Null sentinel.
 // RESP3 uses a single unified null (_\r\n) replacing RESP2's $-1\r\n and *-1\r\n.

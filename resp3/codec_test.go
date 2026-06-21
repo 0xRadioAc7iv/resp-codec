@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	respcodec "github.com/0xRadioAc7iv/resp-codec"
+	respcodec "github.com/0xRadioAc7iv/resp-codec/v2"
 )
 
 func ExampleEncode() {

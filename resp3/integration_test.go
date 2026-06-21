@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	respcodec "github.com/0xRadioAc7iv/resp-codec"
-	"github.com/0xRadioAc7iv/resp-codec/resp3"
+	respcodec "github.com/0xRadioAc7iv/resp-codec/v2"
+	"github.com/0xRadioAc7iv/resp-codec/v2/resp3"
 )
 
 func redisAddr() string {

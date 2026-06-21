@@ -3,12 +3,12 @@
 A Go library for encoding and decoding the [Redis Serialization Protocol (RESP2)](https://redis.io/docs/latest/develop/reference/protocol-spec/).
 
 [![CI](https://github.com/0xRadioAc7iv/resp-codec/actions/workflows/ci.yml/badge.svg)](https://github.com/0xRadioAc7iv/resp-codec/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/0xRadioAc7iv/resp-codec.svg)](https://pkg.go.dev/github.com/0xRadioAc7iv/resp-codec)
+[![Go Reference](https://pkg.go.dev/badge/github.com/0xRadioAc7iv/resp-codec/v2.svg)](https://pkg.go.dev/github.com/0xRadioAc7iv/resp-codec/v2)
 
 ## Installation
 
 ```sh
-go get github.com/0xRadioAc7iv/resp-codec
+go get github.com/0xRadioAc7iv/resp-codec/v2
 ```
 
 ## Type Mapping
@@ -70,7 +70,7 @@ The `resp3` subpackage implements [RESP3](https://github.com/redis/redis-specifi
 `resp3.Decode` is a recursive-descent parser over a shared cursor, the same approach Redis's own client-side reply parser uses: aggregate types (arrays, maps, sets, attributes, push) don't pre-compute how many bytes a nested element occupies, they just decode the next value and let the cursor advance by exactly as much as that value needed. This means arbitrarily deep nesting and binary-safe blob/verbatim/error strings (which may contain `\r`, `\n`, or bytes that look like other type sigils) decode correctly without special-casing.
 
 ```go
-import "github.com/0xRadioAc7iv/resp-codec/resp3"
+import "github.com/0xRadioAc7iv/resp-codec/v2/resp3"
 ```
 
 | Go type                              | RESP3 type    | Wire format                    |

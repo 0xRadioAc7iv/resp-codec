@@ -26,8 +26,8 @@ import (
 	"math/big"
 	"strconv"
 
-	respcodec "github.com/0xRadioAc7iv/resp-codec"
-	"github.com/0xRadioAc7iv/resp-codec/internal/wire"
+	respcodec "github.com/0xRadioAc7iv/resp-codec/v2"
+	"github.com/0xRadioAc7iv/resp-codec/v2/internal/wire"
 )
 
 // Encode serializes a Go value into its RESP3 byte representation.

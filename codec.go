@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/0xRadioAc7iv/resp-codec/internal/wire"
+	"github.com/0xRadioAc7iv/resp-codec/v2/internal/wire"
 )
 
 // Encode serializes a Go value into its RESP byte representation.
