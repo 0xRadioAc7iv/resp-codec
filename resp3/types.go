@@ -43,7 +43,8 @@ var NaN = NaNValue{}
 
 // AttributeType is a RESP3 attribute map. It encodes like Map but uses the |
 // sigil, allowing servers to attach out-of-band metadata before the actual reply.
-// Wire format: |<pairs>\r\n<key><value>...<reply>.
+// The reply itself is a separate value that follows on the wire; AttributeType
+// covers only the attribute map. Wire format: |<pairs>\r\n<key><value>...
 type AttributeType map[respcodec.SimpleString]any
 
 // Push represents a RESP3 server-initiated out-of-band message sent outside the

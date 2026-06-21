@@ -11,7 +11,7 @@
 //	VerbatimString                  ↔ =<len>\r\n<data>\r\n
 //	int                             ↔ :<value>\r\n
 //	*big.Int                        ↔ (<value>\r\n             (big number)
-//	float64 (and InfValue/NaNValue) ↔ ,<value>\r\n             (double)
+//	float64 (and InfValue/NegInfValue/NaNValue) ↔ ,<value>\r\n   (double)
 //	NullValue                       ↔ _\r\n
 //	bool                            ↔ #t\r\n / #f\r\n
 //	[]any                           ↔ *<len>\r\n<elements>...

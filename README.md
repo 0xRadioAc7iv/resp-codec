@@ -82,7 +82,7 @@ import "github.com/0xRadioAc7iv/resp-codec/resp3"
 | `resp3.VerbatimString`               | Verbatim string | `=<len>\r\n<data>\r\n`        |
 | `int`                                | Integer       | `:<value>\r\n`                  |
 | `*big.Int`                           | Big number    | `(<value>\r\n`                  |
-| `float64` / `resp3.Inf` / `resp3.NaN`| Double        | `,<value>\r\n`                  |
+| `float64` / `resp3.Inf` / `resp3.NegInf` / `resp3.NaN`| Double | `,<value>\r\n`                  |
 | `resp3.Null`                         | Null          | `_\r\n`                         |
 | `bool`                               | Boolean       | `#t\r\n` / `#f\r\n`             |
 | `[]any`                              | Array         | `*<len>\r\n<elements>`          |
